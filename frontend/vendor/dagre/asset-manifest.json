@@ -1,0 +1,20 @@
+{
+  "package": "@dagrejs/dagre",
+  "version": "3.1.3",
+  "registry": "https://registry.npmjs.org",
+  "integrity": "sha512-X4aUTwOReZvthaZWOVHqlJ52/ZdhZFEM4+Lh/uR4XooUSLE6p71bcy7MPGzYnNUcNh+nj+i/qJQpCMIdQnSmrg==",
+  "files": {
+    "dagre.min.js": {
+      "sha256": "54a503e346f93ca0bb10abe7999587e037262935687aca45eb4e4b0f64bbb578",
+      "bytes": 49326
+    },
+    "LICENSE": {
+      "sha256": "6a349742a6cb219d5a2fc8d0844f6d89a6efc62e20c664450d884fc7ff2d6015",
+      "bytes": 1062
+    },
+    "dagre.min.js.LEGAL.txt": {
+      "sha256": "9148bffb1e84382a8b6668eeb2b53c6a554341d714fba129856ea5eb350d35f3",
+      "bytes": 1078
+    }
+  }
+}
