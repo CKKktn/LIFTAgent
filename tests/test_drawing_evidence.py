@@ -118,6 +118,10 @@ def test_correction_reindexes_the_record_and_rejects_a_stale_version(workspace, 
     data(client.patch(row_url, json={"version": fixed["version"], "status": "rejected"}))
     parse(client, dataset, [doc])
     assert data(client.post("/api/v1/retrieval", json=search))["chunks"] == []
+    rejected = data(client.get(row_url))
+    data(client.patch(row_url, json={"version": rejected["version"], "status": "confirmed"}))
+    [restored] = data(client.post("/api/v1/retrieval", json=search))["chunks"]
+    assert restored["source_available"] is True
 
 
 def test_confirmation_needs_two_visible_regions(workspace, vision_api):

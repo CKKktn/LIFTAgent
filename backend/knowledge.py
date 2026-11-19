@@ -467,6 +467,7 @@ class KnowledgeService:
             drawing["version"] += 1
             content = drawing_text(drawing)
             enabled = drawing["status"] != "rejected"
+            metadata["source_available"] = enabled
         else:
             if drawing:
                 raise HTTPException(400, "请在图纸标注表中核对或修改该切片")
