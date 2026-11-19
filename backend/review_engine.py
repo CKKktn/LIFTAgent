@@ -19,6 +19,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from pydantic import ValidationError
 
 from .db import dumps, now
+from .drawing_evidence import awaiting_image_review, image_evidence_context
 from .knowledge import ReviewSourceChanged, ReviewSourceTooLarge
 from .models import provider_error
 from .retrieval import KnowledgeRetriever
@@ -100,7 +101,9 @@ def _ids(values, label, maximum=1000):
 
 
 def _safe_source(source, content=None):
-    allowed = ("id", "document_id", "dataset_id", "document_name", "ordinal", "page_number", "page_num_int", "page", "positions", "sheet", "slide_number", "source_kind", "reviewId", "excerpt_start", "excerpt_end")
+    allowed = ("id", "document_id", "dataset_id", "document_name", "ordinal", "page_number", "page_num_int", "page",
+               "positions", "sheet", "slide_number", "source_kind", "reviewId", "excerpt_start", "excerpt_end",
+               "drawing_evidence", "drawing_page_text")
     result = {key: copy.deepcopy(source[key]) for key in allowed if key in source}
     if content is not None:
         result["content"] = content
@@ -420,17 +423,24 @@ class ReviewEngine:
         mode = ("""这是数值指标核查。优先找当前项目、同一对象及可比工况下直接测量该指标的有效实测材料。核对项目、对象、版本或批次、条件、单位和比较方向；不适用的测试、历史样机及不同工况作为背景。适用的实测引用须标注 basis="可比实测"，并用一句话写清实测值、门槛及比较结果。
 即使原要求使用“方案设计”措辞，若同一指标有可比实测且低于要求或超出限值，最终判“不满足”，将实测列为反证，并在判断依据中同时交代设计值和实测值。设计达标和实测未达标不构成证据冲突。只有同等适用的实测材料一份达标、另一份不达标，且无法根据适用性或版本定夺时，才判证据冲突。没有可比实测时，可依据具体方案判设计符合性，明确结论范围。""" if requirement["type"] == "numeric" else
                 "这是功能条件核查：检查是否明确描述功能实现机制或属性，具体设计机制可作为支持，仅重复需求或未来愿望不算实现，不强求数值或测试报告。")
-        prompt = mode + """
+        image_policy = """
+带 image_evidence 的材料包含图纸标注或图片转录。人工确认的图纸标注用于核对设计图上明确写出的对象和值，
+引用必须说明这是图纸标注。图纸标注和图片转录都不作为可比实测。待复核的标注及图片转录可引用为背景线索，留待人工核对原图。
+对属于图纸对象归属的判断，应使用带原图位置的确认标注。试验、成品检验或验收须有对应阶段的有效记录。""" if any(map(image_evidence_context, chunks)) else ""
+        prompt = mode + image_policy + """
 未召回不能判未完成。材料分类相对于本条要求：支持=支持全部或部分符合；反证=在可比条件下明确不符；计划=未来承诺或愿望；背景=要求基准、适用条件或其他上下文。
 analysis 用一至两句给出决定结论的比较，写明关键数值和引用编号。先写决定结果的证据，再交代设计与实测的差异。project_plan 只写判断依据未覆盖的材料要点，不复述核查要求；gaps 只写尚未解决的缺口或冲突；recommendation 只写具体下一步。没有独立内容的字段用空字符串。
 输出 JSON：{"status":"已满足/部分满足/不满足/证据不足/证据冲突","project_plan":"补充材料要点","analysis":"简短判断依据","gaps":"缺口或冲突","recommendation":"具体后续行动","evidence":[{"source_id":"E1","kind":"支持/反证/计划/背景","basis":"可比实测或空字符串","analysis":"该引用支持的具体事实及比较"}]}。
 只选择下方真实编号，正文引用的每个编号也必须列入evidence，不输出或改写quote；程序按编号回填原文。无依据则 evidence为空且判证据不足。证据冲突必须同时有可比的支持材料和反证，不能仅因来源不同就判冲突。
-指标：""" + json.dumps({key: requirement.get(key) for key in ("title", "criterion", "question")}, ensure_ascii=False) + "\n用户关注点：" + report.get("focus", "") + "\n证据：" + json.dumps([{"source_id": item["reviewId"], "file": item["document_name"], "content": item["content"]} for item in chunks], ensure_ascii=False)
+指标：""" + json.dumps({key: requirement.get(key) for key in ("title", "criterion", "question")}, ensure_ascii=False) + "\n用户关注点：" + report.get("focus", "") + "\n证据：" + json.dumps([
+            {"source_id": item["reviewId"], "file": item["document_name"], "content": item["content"], **image_evidence_context(item)}
+            for item in chunks
+        ], ensure_ascii=False)
         result = self._ask(report, prompt, JudgmentOutput)
         if not result["analysis"].strip():
             raise ReviewOutputError("模型未提供有效的比较分析")
         mapping = {item["reviewId"]: item for item in chunks}
-        selected, seen, rejected = [], set(), 0
+        selected, seen, rejected, pending = [], set(), 0, []
         for row in result.pop("evidence"):
             if not isinstance(row, dict) or not isinstance(row.get("source_id"), str) or row["source_id"] not in mapping or not isinstance(row.get("kind"), str) or row["kind"] not in EVIDENCE_KINDS or not isinstance(row.get("analysis"), str) or not row["analysis"].strip():
                 rejected += 1
@@ -439,9 +449,24 @@ analysis 用一至两句给出决定结论的比较，写明关键数值和引�
                 continue
             seen.add(row["source_id"])
             source = mapping[row["source_id"]]
-            selected.append({"source_id": row["source_id"], "kind": row["kind"], "analysis": row["analysis"], "quote": source["content"], "source": _safe_source(source, source["content"])})
-            if requirement["type"] == "numeric" and row.get("basis") == "可比实测" and row["kind"] in {"支持", "反证"}:
+            kind, analysis = row["kind"], row["analysis"]
+            if kind in {"支持", "反证"} and awaiting_image_review(source):
+                pending.append(row["source_id"])
+                kind, analysis = "背景", "候选图片证据待对照原图核验"
+            selected.append({"source_id": row["source_id"], "kind": kind, "analysis": analysis,
+                             "quote": source["content"], "source": _safe_source(source, source["content"])})
+            if source.get("drawing_evidence"):
+                selected[-1]["basis"] = "图纸标注"
+            elif requirement["type"] == "numeric" and row.get("basis") == "可比实测" and kind in {"支持", "反证"}:
                 selected[-1]["basis"] = "可比实测"
+        if result["status"] in {"证据不足", "待人工复核"} and not selected:
+            candidate = next((item for item in chunks if awaiting_image_review(item)), None)
+            if candidate:
+                selected.append({"source_id": candidate["reviewId"], "kind": "背景", "analysis": "候选材料可打开原图核对",
+                                 "quote": candidate["content"], "source": _safe_source(candidate, candidate["content"])})
+                seen.add(candidate["reviewId"])
+                if candidate.get("drawing_evidence"):
+                    selected[-1]["basis"] = "图纸标注"
         kinds = {item["kind"] for item in selected}
         narrative = "\n".join(str(result.get(key, "")) for key in ("project_plan", "analysis", "gaps", "recommendation")) + "\n" + "\n".join(item["analysis"] for item in selected)
         missing_references = set(re.findall(r"(?<![A-Za-z0-9_])E\d+(?![A-Za-z0-9_])", narrative)) - seen
@@ -449,7 +474,7 @@ analysis 用一至两句给出决定结论的比较，写明关键数值和引�
         if not (rejected or missing_references) and any(item["kind"] == "反证" for item in measured):
             conflict = any(item["kind"] == "支持" for item in measured)
             verdict = "证据冲突" if conflict else "不满足"
-            if result["status"] != verdict:
+            if result["status"] != verdict or pending:
                 decisive = measured if conflict else [item for item in measured if item["kind"] == "反证"]
                 result.update(
                     status=verdict,
@@ -462,6 +487,28 @@ analysis 用一至两句给出决定结论的比较，写明关键数值和引�
             result.update(status="待人工复核", retryable=True)
             reason = "正文引用未列入有效来源（" + "、".join(sorted(missing_references)) + "）" if missing_references else "部分引用无效或证据类型不足以支持原判定"
             result["gaps"] = (result.get("gaps", "").rstrip("；;。 ") + "；" if result.get("gaps", "").strip() else "") + reason + "，已保留有效原文，请人工复核。"
+        deciding = [item for item in selected if item["kind"] in {"支持", "反证"}]
+        if pending and (unsupported or not deciding):
+            refs = "、".join(pending)
+            result.update(status="待人工复核", project_plan="", analysis=f"候选图片证据 {refs} 尚待核对原图。",
+                          gaps="请核对标注原文与对象归属。", recommendation="打开图片引用核对并保存后重新审查。")
+        elif any(item.get("basis") == "图纸标注" for item in deciding):
+            criterion = requirement.get("criterion") or ""
+            requires_measurement = re.search(
+                r"实测|测得|实物.{0,12}(?:测量|测定|卡尺)|成品.{0,6}(?:检验|检测)|验收测试|测量记录|测试报告|检测报告",
+                criterion,
+            )
+            drawing_refs = [item for item in deciding if item.get("basis") == "图纸标注"]
+            measured_claim = re.search(r"(?:实测|测试|测量|检测|验收).{0,12}(?:为\s*[+\-\d]|达标|合格|已通过|测得)", narrative)
+            if (requires_measurement or measured_claim) and not measured:
+                refs = "、".join(item["source_id"] for item in drawing_refs)
+                result.update(status="证据不足" if requires_measurement else "待人工复核", project_plan="",
+                              analysis=f"图纸标注 {refs} 可核对设计值。实测或验收结论需对应阶段的记录。",
+                              gaps="缺少可比较的实际测量或检验记录。", recommendation="补充同一对象、版本与条件的记录。")
+                for item in drawing_refs:
+                    item.update(kind="背景", analysis="原图标注仅反映设计值")
+            elif len(drawing_refs) == len(deciding) and result["status"] in {"已满足", "部分满足", "不满足"}:
+                result["analysis"] = "图纸标注核查。 " + result["analysis"]
         return {**result, "evidence": selected, "checkType": requirement["type"]}
 
     def check_document(self, report, requirement):
@@ -469,7 +516,7 @@ analysis 用一至两句给出决定结论的比较，写明关键数值和引�
         docs = [row for row in self._document_rows(report) if row["id"] not in baseline and row["enabled"] and not re.search(r"^(?:~\$|\.~lock\.)|\.(?:tmp|temp|lock)$", row["name"], re.I)]
         def name(value):
             value = str(value).replace("\\", "/").rsplit("/", 1)[-1]
-            return re.sub(r"[\s_\-（）()《》]", "", re.sub(r"\.(pdf|docx?|xlsx?|pptx?|txt|md)$", "", unicodedata.normalize("NFKC", value).casefold()))
+            return re.sub(r"[\s_\-（）()《》]", "", re.sub(r"\.(pdf|docx?|xlsx?|pptx?|txt|md|png|jpe?g)$", "", unicodedata.normalize("NFKC", value).casefold()))
         wanted = name(requirement.get("document_name") or requirement["title"])
         if len(wanted) < 2:
             raise ReviewOutputError("需要核对的技术文件名称不明确，请修改指标清单")

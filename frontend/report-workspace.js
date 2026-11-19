@@ -1,4 +1,4 @@
-import {esc,sourcesHtml,evidenceReference,evidenceDisplayEntries} from './ui.js';
+import {esc,sourcesHtml,evidenceReference,evidenceDisplayEntries,drawingEvidenceOf} from './ui.js';
 import {reviewQuestion,issueText} from './review.js';
 
 const VERDICTS=['已满足','部分满足','不满足','证据不足','待人工复核','证据冲突'];
@@ -124,7 +124,8 @@ function itemDetails(row){
   const origin=sourceFor({source:r.source,quote:r.quote}),entries=evidenceDisplayEntries(row.evidence),occurrences=new Map();
   const evidence=entries.map(({item,index,aliases})=>{
     const source=sourceFor(item);
-    const base=['evidence',text(item.source_id),text(source.id),text(source.dataset_id||source.kb_id),text(source.document_id||source.doc_id||source.document_name),contentKey(JSON.stringify([source.content,source.page,source.page_num_int,source.positions||source.position_int,item.kind,item.analysis]))].join(':');
+    const drawing=drawingEvidenceOf(source);
+    const base=['evidence',text(item.source_id),text(source.id),text(source.dataset_id||source.kb_id),text(source.document_id||source.doc_id||source.document_name),contentKey(JSON.stringify([source.content,source.page,source.page_num_int,source.positions||source.position_int,drawing?.id,drawing?.version,item.kind,item.analysis]))].join(':');
     const occurrence=occurrences.get(base)||0;occurrences.set(base,occurrence+1);const key=base+':'+occurrence;
     const aliasText=aliases.length>1?'；原编号：'+aliases.map(source_id=>evidenceReference(row.id,{source_id},index)).join('、'):'';
     return `<section class="rw-evidence-block" data-rw-evidence-key="${esc(key)}"><div class="rw-evidence-heading"><strong class="rw-evidence-reference">引用 ${esc(evidenceReference(row.id,item,index))}${esc(aliasText)}</strong></div>${sourceBlock(source,question,key)}</section>`;

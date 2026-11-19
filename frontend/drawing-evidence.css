@@ -1,0 +1,154 @@
+.viewer-content {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.viewer-content > .viewer-body {
+  min-width: 0;
+}
+
+.viewer-drawing-review {
+  flex: 0 0 clamp(235px, 29%, 350px);
+  padding: .85rem 1rem;
+  overflow: auto;
+  border-left: 1px solid var(--line);
+}
+
+.drawing-review-form .hint {
+  margin-top: .35rem;
+}
+
+.drawing-review-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .65rem;
+  margin-top: .85rem;
+}
+
+.drawing-review-grid label {
+  margin: 0;
+}
+
+.drawing-review-form input,
+.drawing-review-form select {
+  width: 100%;
+  margin-top: .25rem;
+}
+
+.drawing-review-form button {
+  margin: .35rem .35rem 0 0;
+}
+
+.drawing-mark-controls {
+  min-width: 0;
+  margin: .8rem 0 0;
+  padding: .35rem .6rem .6rem;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-size: .76rem;
+}
+
+.drawing-mark-controls [aria-pressed="true"] {
+  border-color: var(--green);
+  color: var(--green);
+}
+
+.drawing-snapshot dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .45rem .7rem;
+  font-size: .76rem;
+}
+
+.drawing-snapshot dt {
+  color: var(--muted);
+}
+
+.drawing-snapshot dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.drawing-snapshot button {
+  margin-top: .6rem;
+}
+
+.drawing-table {
+  min-width: 525px;
+}
+
+.drawing-table td {
+  vertical-align: top;
+}
+
+.drawing-table td small {
+  display: block;
+  margin-top: .25rem;
+}
+
+.drawing-image-frame {
+  position: relative;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 auto;
+}
+
+.drawing-overlays {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.drawing-overlays.is-marking {
+  pointer-events: auto;
+  cursor: crosshair;
+  touch-action: none;
+  user-select: none;
+}
+
+.drawing-box {
+  position: absolute;
+  z-index: 1;
+  border: 2px solid var(--drawing-color);
+  background: var(--drawing-fill);
+  pointer-events: none;
+}
+
+.drawing-box b {
+  position: absolute;
+  top: 0;
+  left: 0;
+  min-width: max-content;
+  padding: .1rem .28rem;
+  background: var(--drawing-color);
+  color: white;
+  font-size: .72rem;
+  line-height: 1.25;
+}
+
+.drawing-box-annotation {
+  --drawing-color: #924400;
+  --drawing-fill: #e8791033;
+  z-index: 2;
+}
+
+.drawing-box-object {
+  --drawing-color: #075a8f;
+  --drawing-fill: #0284c72b;
+  border-style: dashed;
+}
+
+@media (max-width: 700px) {
+  .viewer-content {
+    flex-direction: column;
+  }
+
+  .viewer-drawing-review {
+    flex: 0 1 auto;
+    max-height: 32dvh;
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+}

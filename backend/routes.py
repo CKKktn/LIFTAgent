@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
 from .db import dumps, now, uid
+from .drawing_evidence import DrawingReviewInput
 from .models import provider_error
 from .parsers import ALLOWED_EXTENSIONS, TEXT_EXTENSIONS
 from .security import require_user
@@ -143,6 +144,24 @@ def make_api(db, models, knowledge, retrieval, chat):
         rows = db.rows("SELECT * FROM chunks WHERE document_id=? ORDER BY ordinal,id", (document_id,))
         rows = [row for row in rows if (not keywords or keywords.casefold() in row["content"].casefold()) and (not id or row["id"] == id)]
         return ok({"chunks": [knowledge.chunk_view(row) for row in rows[(page - 1) * page_size:page * page_size]], "total": len(rows)})
+
+    @router.get("/datasets/{dataset_id}/documents/{document_id}/drawing-evidence")
+    def list_drawing_evidence(dataset_id: str, document_id: str, page: int = 1, page_size: int = 20):
+        page, page_size = page_values(page, page_size)
+        return ok(knowledge.drawing_records(dataset_id, document_id, page, page_size))
+
+    @router.get("/datasets/{dataset_id}/documents/{document_id}/drawing-evidence/{evidence_id}")
+    def get_drawing_evidence(dataset_id: str, document_id: str, evidence_id: str):
+        return ok(knowledge.drawing_record(dataset_id, document_id, evidence_id))
+
+    @router.patch("/datasets/{dataset_id}/documents/{document_id}/drawing-evidence/{evidence_id}")
+    def review_drawing_evidence(dataset_id: str, document_id: str, evidence_id: str, body: DrawingReviewInput):
+        try:
+            return ok(knowledge.review_drawing(dataset_id, document_id, evidence_id, body))
+        except HTTPException:
+            raise
+        except Exception as error:
+            raise HTTPException(503, provider_error(error)) from None
 
     @router.post("/datasets/{dataset_id}/documents/{document_id}/chunks")
     def add_chunk(dataset_id: str, document_id: str, body: dict = Body(...)):

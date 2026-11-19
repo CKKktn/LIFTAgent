@@ -17,6 +17,7 @@ from .chat import ChatService
 from .collab_jobs import CollabJobService, make_collab_jobs_router
 from .config import PROJECT_ROOT, Settings
 from .db import Database, dumps, now, uid
+from .drawing_evidence import DRAWING_RECOGNITION_METHOD
 from .knowledge import KnowledgeService
 from .models import ModelRegistry, provider_error
 from .records import RecordService
@@ -186,6 +187,7 @@ def create_app(settings: Settings | None = None):
     @app.get("/config", dependencies=[Depends(require_user)])
     def config():
         return {"configured": True, "base": "", "engine": "LangChain", "llm_configured": bool(models.default_id("chat")),
+            "drawing_recognition_method": DRAWING_RECOGNITION_METHOD,
             "embedding_mode": "本地文本特征" if models.default_id("embedding") == "local-features" else "外部嵌入模型",
             "versions": {name: importlib.metadata.version(name) for name in ("langchain", "langchain-openai", "langgraph")}}
 
@@ -207,7 +209,8 @@ def create_app(settings: Settings | None = None):
         model = next((item for item in models.all() if item["id"] == model_id), None)
         if not model or model["read_only"]:
             raise HTTPException(400, "该模型不存在或不能删除")
-        if any(item.get("embedding_model") == model_id for item in db.json_list("datasets")):
+        if any(item.get("embedding_model") == model_id or item.get("parser_config", {}).get("drawing_vision_model") == model_id
+               for item in db.json_list("datasets")):
             raise HTTPException(409, "模型仍被知识库使用，请先调整知识库配置")
         if any(item.get("llm_id") == model_id for item in db.json_list("chats")):
             raise HTTPException(409, "模型仍被助手使用，请先调整助手配置")
@@ -293,7 +296,8 @@ def create_app(settings: Settings | None = None):
     app.include_router(make_collab_jobs_router(collab_jobs))
 
     public_files = {"collab-jobs.js", "collab-jobs.css", "review-jobs.js", "report-export.js", "report-workspace.js", "report-workspace.css", "app.js", "api.js", "ui.js", "viewer.js", "review.js", "retrieval-review.js", "three-stage-review.js",
-        "upload-filter.js", "backgrounds.js", "style.css", "backgrounds.css", "model-settings.js", "model-settings.css", "login.js", "review-state.js"}
+        "upload-filter.js", "backgrounds.js", "style.css", "backgrounds.css", "model-settings.js", "model-settings.css", "login.js", "review-state.js",
+        "drawing-evidence.js", "drawing-evidence.css"}
 
     @app.get("/assets/{filename:path}")
     @app.get("/vendor/{filename:path}")

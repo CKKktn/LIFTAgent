@@ -10,10 +10,12 @@ import zipfile
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
+from .drawing_sources import DRAWING_EXTENSIONS
+
 TEXT_EXTENSIONS = {".txt", ".md", ".csv", ".tsv", ".json", ".xml", ".html", ".htm", ".yaml", ".yml", ".log"}
 MODERN_OFFICE = {".docx", ".xlsx", ".pptx"}
 LEGACY_OFFICE = {".doc", ".xls", ".ppt", ".odt", ".ods", ".odp", ".rtf"}
-ALLOWED_EXTENSIONS = TEXT_EXTENSIONS | MODERN_OFFICE | LEGACY_OFFICE | {".pdf"}
+ALLOWED_EXTENSIONS = TEXT_EXTENSIONS | MODERN_OFFICE | LEGACY_OFFICE | DRAWING_EXTENSIONS
 CHUNK_METHODS = {"naive", "one", "laws", "table"}
 
 
@@ -38,7 +40,7 @@ def convert_office(path, directory, target, configured_binary=""):
     return result
 
 
-def extract(path: Path, max_characters=2_000_000, libreoffice=""):
+def extract(path: Path, max_characters=2_000_000, libreoffice="", *, allow_empty=False):
     extension = path.suffix.lower()
     output = []
     if extension in TEXT_EXTENSIONS:
@@ -107,7 +109,7 @@ def extract(path: Path, max_characters=2_000_000, libreoffice=""):
     else:
         raise ValueError("暂不支持该文件类型")
     output = [Document(page_content=item.page_content.replace("\x00", "").strip(), metadata=item.metadata) for item in output if item.page_content.strip()]
-    if not output:
+    if not output and not allow_empty:
         raise ValueError("未提取到文字。扫描 PDF 或图片需要先 OCR，再上传带文本层的 PDF 或 Word")
     if sum(len(item.page_content) for item in output) > max_characters:
         raise ValueError("提取文字超过两百万字符，请拆分材料")
