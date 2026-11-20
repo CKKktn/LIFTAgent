@@ -48,7 +48,7 @@ def vision_api(workspace, monkeypatch):
     monkeypatch.setattr(provider_module, "answer_for", answer)
     with FakeProvider() as api:
         model = client.post("/settings/models", json={
-            "name": "drawing-fixture", "base_url": api.base_url, "model_type": "chat", "api_key": "test-only",
+            "name": "drawing-fixture", "base_url": api.base_url, "model_type": "vision", "api_key": "test-only",
         })
         assert model.status_code == 200, model.text
         dataset = first_dataset(client)

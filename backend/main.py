@@ -5,6 +5,7 @@ import importlib.metadata
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
@@ -19,7 +20,7 @@ from .config import PROJECT_ROOT, Settings
 from .db import Database, dumps, now, uid
 from .drawing_evidence import DRAWING_RECOGNITION_METHOD
 from .knowledge import KnowledgeService
-from .models import ModelRegistry, provider_error
+from .models import ModelRegistry, provider_error, vision_connection_probe
 from .records import RecordService
 from .review_jobs import ReviewJobService, make_review_jobs_router
 from .retrieval import RetrievalService
@@ -187,6 +188,7 @@ def create_app(settings: Settings | None = None):
     @app.get("/config", dependencies=[Depends(require_user)])
     def config():
         return {"configured": True, "base": "", "engine": "LangChain", "llm_configured": bool(models.default_id("chat")),
+            "vision_configured": bool(models.default_id("vision")),
             "drawing_recognition_method": DRAWING_RECOGNITION_METHOD,
             "embedding_mode": "本地文本特征" if models.default_id("embedding") == "local-features" else "外部嵌入模型",
             "versions": {name: importlib.metadata.version(name) for name in ("langchain", "langchain-openai", "langgraph")}}
@@ -198,7 +200,8 @@ def create_app(settings: Settings | None = None):
 
     @app.get("/settings/models", dependencies=[Depends(require_user)])
     def model_settings():
-        return {"models": models.all(), "defaults": models.defaults(), "llm_configured": bool(models.default_id("chat"))}
+        return {"models": models.all(), "defaults": models.defaults(), "llm_configured": bool(models.default_id("chat")),
+                "vision_configured": bool(models.default_id("vision"))}
 
     @app.post("/settings/models", dependencies=[Depends(require_user)])
     def save_model(body: dict = Body(...)):
@@ -225,6 +228,13 @@ def create_app(settings: Settings | None = None):
         if not model:
             raise HTTPException(404, "模型不存在")
         try:
+            if model["model_type"] == "vision":
+                message, digits = vision_connection_probe()
+                visual = models.vision(model_id, max_tokens=128).model_copy(update={"streaming": False})
+                response = await visual.ainvoke([message])
+                if re.findall(r"(?<!\d)\d{6}(?!\d)", response.text) != [digits]:
+                    raise HTTPException(502, "模型已响应，但未正确读出测试图片中的数字，请确认模型及 API 支持图片输入")
+                return {"success": True, "message": "视觉连接成功，已正确读取合成测试图片"}
             if model["model_type"] == "chat":
                 response = await models.chat(model_id, max_tokens=128).ainvoke("请仅回复 OK")
                 return {"success": True, "message": "连接成功", "sample": str(response.content)[:100]}

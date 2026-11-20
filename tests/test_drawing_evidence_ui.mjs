@@ -50,19 +50,24 @@ test('isolated evidence requests encode each scoped path segment', async () => {
     '/api/v1/datasets/kb%3F1/documents/doc%2F1/drawing-evidence/e%231');
 });
 
-test('drawing configuration uses stable chat model IDs and describes the image API', async () => {
+test('drawing configuration offers dedicated visual models and preserves an existing chat selection', async () => {
   const {drawingEvidenceSettings} = await import('../frontend/drawing-evidence.js');
   const models=[
-    {id:'vision-42',name:'视觉模型',instance_name:'本地测试',model_type:'chat'},
-    {id:'text-only',name:'文本模型',model_type:'chat',supports_images:false},
+    {id:'vision-42',name:'视觉模型',instance_name:'本地测试',model_type:'vision'},
+    {id:'old-drawing',name:'旧版图纸模型',model_type:'chat'},
+    {id:'text-only',name:'文本模型',model_type:'chat'},
     {id:'embedding-42',name:'嵌入模型',model_type:'embedding'},
   ];
   const settings=drawingEvidenceSettings(models,'vision-42','ocr_vision');
   assert.match(settings,/<option value="">关闭图纸识别<\/option>/);
   assert.match(settings,/<option value="vision-42" selected>视觉模型 · 本地测试<\/option>/);
-  assert.doesNotMatch(settings,/text-only|embedding-42/);
+  assert.doesNotMatch(settings,/text-only|embedding-42|old-drawing/);
   assert.match(settings,/图像发送至所选模型 API/);
   assert.match(settings,/OCR 辅助视觉/);
+  assert.match(settings,/模型设置/);
+  const legacy=drawingEvidenceSettings(models,'old-drawing','vision');
+  assert.match(legacy,/<option value="old-drawing" selected>/);
+  assert.doesNotMatch(legacy,/text-only|embedding-42/);
 });
 
 test('the drawing table and review form display uncertainty and save all editable fields and version', async () => {

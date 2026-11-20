@@ -47,13 +47,13 @@
 <section id="models" class="page" hidden><article class="panel"><div class="panel-heading"><h1>模型设置 <small>Models</small></h1><button id="nativeModels" class="btn subtle small" type="button">配置模型接入</button></div><p class="hint">配置模型地址、名称和密钥后，即可使用 AI 审查与协审；知识库管理和本地检索可先使用。</p><form id="modelConnectionForm" class="model-connection-form">
 <div class="panel-heading"><h2>模型接入</h2><span id="modelConnectionStatus" class="hint" aria-live="polite"></span></div>
 <input id="configModelId" type="hidden"><div class="connection-fields">
-<label>用途<select id="configModelType"><option value="chat">对话 / 合同审查</option><option value="embedding">语义嵌入</option><option value="rerank">重排（兼容 /rerank 接口）</option></select></label>
+<label>用途<select id="configModelType" aria-describedby="configVisionHelp"><option value="chat">对话 / 合同审查</option><option value="vision">视觉 / 图纸识别</option><option value="embedding">语义嵌入</option><option value="rerank">重排（兼容 /rerank 接口）</option></select></label>
 <label>配置名称<input id="configInstance" value="通用接口" required maxlength="100"></label>
 <label>模型名称<input id="configModelName" placeholder="服务商模型名称" required maxlength="250"></label>
 <label>接口地址<input id="configBaseUrl" placeholder="填写接口根地址" aria-describedby="configBaseUrlHelp" type="url" required><small id="configBaseUrlHelp" class="hint">使用服务商的 OpenAI 兼容接口根地址；本地服务示例：http://127.0.0.1:11434/v1。</small></label>
 <label>API Key<input id="configApiKey" type="password" autocomplete="new-password" aria-describedby="configApiKeyHelp" placeholder="输入服务商密钥"><small id="configApiKeyHelp" class="hint">云端服务填写密钥，本地服务可留空；编辑已有接入时，留空保留原密钥。</small></label>
 <label class="connection-check"><input id="configSetDefault" type="checkbox" checked>设为此用途的默认模型</label>
-</div><p class="hint">兼容 OpenAI 格式，可接云端服务或本地模型。密钥由后端加密保存。更换知识库嵌入模型后，需要重新解析文件。</p>
+</div><p id="configVisionHelp" class="hint" hidden>视觉模型需支持图片输入。测试看图连接会发送一张含随机数字的合成图片，核对模型的读图结果。保存后在「知识库配置」中选择该视觉模型。</p><p class="hint">兼容 OpenAI 格式，可接云端服务或本地模型。密钥由后端加密保存。更换知识库嵌入模型后，需要重新解析文件。</p>
 <div class="row"><button class="btn primary" type="submit" id="saveModelConnection">保存接入</button><button class="btn subtle" type="button" id="resetModelConnection">清空表单</button></div>
 <div id="configuredConnections" class="configured-connections"></div></form><div id="defaultModels" class="default-models"></div><div id="modelList" class="model-grid"></div></article></section>
 <section id="api" class="page" hidden><article class="panel api-panel"><div class="panel-heading"><h1>接口调试 <small>API Console</small></h1><span class="hint">本地接口</span></div><label for="endpointPreset">接口目录</label><select id="endpointPreset"><option value="">自定义请求</option></select><div class="row"><select id="apiMethod" aria-label="HTTP 方法"><option>GET</option><option>POST</option><option>PATCH</option><option>PUT</option><option>DELETE</option></select><input id="apiPath" class="grow" value="/api/v1/system/healthz" aria-label="接口路径"></div><label for="apiBody">JSON 请求体</label><textarea id="apiBody" rows="7" placeholder='{"question":"..."}'></textarea><button id="runApi" class="btn primary">发送请求 ↗</button><pre id="apiResponse">等待请求…</pre></article></section>

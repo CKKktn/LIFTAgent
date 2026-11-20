@@ -3,18 +3,40 @@ from __future__ import annotations
 import base64
 from collections import Counter
 import hashlib
+from io import BytesIO
 import json
 import math
 import os
 import re
+from secrets import randbelow
 from urllib.parse import unquote, urlsplit
 
 from cryptography.fernet import Fernet
 from fastapi import HTTPException
 from langchain_core.embeddings import Embeddings
+from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 from .db import Database, dumps, now, uid
+
+
+MODEL_TYPES = {"chat": "对话模型", "vision": "视觉模型", "embedding": "嵌入模型", "rerank": "重排模型"}
+
+
+def vision_connection_probe():
+    from PIL import Image, ImageDraw, ImageFont
+
+    digits = f"{randbelow(1_000_000):06d}"
+    with Image.new("RGB", (90, 24), "white") as image, BytesIO() as buffer:
+        ImageDraw.Draw(image).text((4, 3), digits, font=ImageFont.load_default(), fill="black")
+        with image.resize((450, 120), Image.Resampling.NEAREST) as enlarged:
+            enlarged.save(buffer, format="PNG")
+        encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    message = HumanMessage(content=[
+        {"type": "text", "text": "请读取这张合成测试图片中的六位数字，只回复图片里的数字。"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64," + encoded}},
+    ])
+    return message, digits
 
 
 def terms(text):
@@ -102,7 +124,7 @@ class ModelRegistry:
         model = next((item.copy() for item in self.all() if item["model_type"] == kind and identifier in (
             item["id"], item["name"], f"{item['name']}@{item['instance_name']}@{item['provider_name']}")), None)
         if model is None:
-            raise HTTPException(503, "请先在“模型设置”中配置" + {"chat": "对话模型", "embedding": "嵌入模型", "rerank": "重排模型"}[kind])
+            raise HTTPException(503, "请先在“模型设置”中配置" + MODEL_TYPES[kind])
         if private:
             if not model["read_only"] or model["id"].startswith("env-"):
                 validate_model_address(model["base_url"])
@@ -116,7 +138,7 @@ class ModelRegistry:
     def defaults(self):
         output = []
         saved = {row["kind"]: row["model_id"] for row in self.db.rows("SELECT kind,model_id FROM model_defaults")}
-        for kind in ("chat", "embedding", "rerank"):
+        for kind in MODEL_TYPES:
             identifier = self.default_id(kind)
             if identifier:
                 model = self.find(identifier, kind)
@@ -132,7 +154,7 @@ class ModelRegistry:
         name = str(body.get("name", "")).strip()
         kind = body.get("model_type", "chat")
         base = str(body.get("base_url", "")).strip().rstrip("/")
-        if not name or len(name) > 250 or kind not in {"chat", "embedding", "rerank"}:
+        if not name or len(name) > 250 or kind not in MODEL_TYPES:
             raise HTTPException(400, "请填写有效的模型名称和类型")
         validate_model_address(base)
         identifier = str(body.get("id") or uid())
@@ -150,19 +172,40 @@ class ModelRegistry:
             secret = ""
         if str(body.get("api_key") or "").strip():
             secret = self.cipher.encrypt(str(body["api_key"]).strip().encode()).decode()
-        reparse = bool(previous and kind == "embedding" and any(previous[field] != model[field] for field in ("name", "base_url")))
+        reparse = bool(previous and kind in {"embedding", "vision", "chat"}
+                       and any(previous[field] != model[field] for field in ("name", "base_url")))
         with self.db.transaction() as connection:
             connection.execute("INSERT INTO models(id,payload,secret) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload,secret=excluded.secret", (identifier, dumps(model), secret))
             if reparse:
                 for row in connection.execute("SELECT id,payload FROM datasets").fetchall():
-                    if json.loads(row["payload"]).get("embedding_model") == identifier:
+                    dataset = json.loads(row["payload"])
+                    if kind == "embedding" and dataset.get("embedding_model") == identifier:
                         connection.execute("UPDATE documents SET run='UNSTART',generation=generation+1,error='嵌入模型接入变更，请重新解析' WHERE dataset_id=?", (row["id"],))
+                    elif kind in {"chat", "vision"} and dataset.get("parser_config", {}).get("drawing_vision_model") == identifier:
+                        connection.execute("UPDATE documents SET run='UNSTART',generation=generation+1,error='图纸识别模型接入变更，请重新解析' WHERE dataset_id=?", (row["id"],))
         if not self.default_id(kind) or body.get("set_default"):
             self.set_default(kind, identifier)
         return {**self.find(identifier, kind), "requires_reparse": reparse}
 
     def chat(self, identifier="", temperature=0.1, max_tokens=4096):
         model = self.find(identifier, "chat", private=True)
+        return self._chat_client(model, temperature, max_tokens)
+
+    def vision_config(self, identifier="", private=False):
+        # Existing drawing knowledge bases store a chat connection's ID.
+        legacy = identifier and any(
+            item["model_type"] == "chat" and identifier in (
+                item["id"], item["name"], f"{item['name']}@{item['instance_name']}@{item['provider_name']}",
+            ) for item in self.all()
+        )
+        return self.find(identifier, "chat" if legacy else "vision", private=private)
+
+    def vision(self, identifier="", temperature=0.1, max_tokens=4096):
+        model = self.vision_config(identifier, private=True)
+        return self._chat_client(model, temperature, max_tokens)
+
+    @staticmethod
+    def _chat_client(model, temperature, max_tokens):
         return ChatOpenAI(
             model=model["name"], base_url=model["base_url"], api_key=model.get("api_key") or "not-required",
             temperature=max(0, min(float(temperature), 2)), max_tokens=max(128, min(int(max_tokens), 16384)),

@@ -1,6 +1,6 @@
 import {buildReportHtml,reportHtmlFilename} from './report-export.js';
 import {renderReportWorkspace,bindReportWorkspace} from './report-workspace.js';
-import {setupModelSettings} from './model-settings.js';
+import {setupModelSettings,modelTypeLabels} from './model-settings.js';
 import {CollabJobClient,isCollabJobRunning,isCollabJobUnresolved,collabReplyLabel,collabWorkflowHtml,mergeCollabMessages} from './collab-jobs.js';
 import {getDefaultChatModel} from './review-state.js';
 import {ReviewJobClient,isReviewJobBusy,reviewJobAction,workflowGraphHtml,workflowGraphSvg,workflowOverviewSvg,workflowAcademicSvg,mountWorkflowInspector} from './review-jobs.js';
@@ -197,14 +197,19 @@ function kbForm(edit=false){
  const k=S.datasets.find(k=>k.id===S.kb);if(edit&&!k)return;
  const current=edit?S.models.find(m=>m.model_id===k.embedding_model):null;
  const selected=current?modelValue(current):'';
+ const drawingSelection=edit?k.parser_config?.drawing_vision_model:S.defaults.find(m=>m.model_type==='vision'&&m.configured!==false)?.model_id;
  const methods=[['naive','通用分块'],['one','每页 / 每个工作表整篇'],['laws','法律条款'],['table','表格 / 按行']];
- modal(edit?'知识库配置':'创建知识库',`<label>名称</label><input name="name" required value="${esc(edit?k.name:'')}"><label>描述</label><textarea name="description">${esc(edit?k.description||'':'')}</textarea><label>分块方法</label><select name="chunk_method">${methods.map(([v,l])=>`<option value="${v}" ${edit&&k.chunk_method===v?'selected':''}>${l}</option>`).join('')}</select><label>分块长度（字符）</label><input name="chunk_size" type="number" min="200" max="6000" value="${edit?k.parser_config?.chunk_size||1000:1000}"><label>重叠长度</label><input name="chunk_overlap" type="number" min="0" max="1999" value="${edit?k.parser_config?.chunk_overlap??120:120}"><label>嵌入模型</label><select name="embedding_model"><option value="">使用默认模型</option>${modelOptions('embedding').map(m=>`<option value="${esc(m.value)}" ${m.value===selected?'selected':''}>${esc(m.label)}</option>`).join('')}</select>${drawingEvidenceSettings(S.models,edit?k.parser_config?.drawing_vision_model:undefined,S.drawingRecognitionMethod)}<p class="hint">修改解析配置后，请重新解析需更新的文件。原文件会保留。</p>`,async f=>{
+ modal(edit?'知识库配置':'创建知识库',`<label>名称</label><input name="name" required value="${esc(edit?k.name:'')}"><label>描述</label><textarea name="description">${esc(edit?k.description||'':'')}</textarea><label>分块方法</label><select name="chunk_method">${methods.map(([v,l])=>`<option value="${v}" ${edit&&k.chunk_method===v?'selected':''}>${l}</option>`).join('')}</select><label>分块长度（字符）</label><input name="chunk_size" type="number" min="200" max="6000" value="${edit?k.parser_config?.chunk_size||1000:1000}"><label>重叠长度</label><input name="chunk_overlap" type="number" min="0" max="1999" value="${edit?k.parser_config?.chunk_overlap??120:120}"><label>嵌入模型</label><select name="embedding_model"><option value="">使用默认模型</option>${modelOptions('embedding').map(m=>`<option value="${esc(m.value)}" ${m.value===selected?'selected':''}>${esc(m.label)}</option>`).join('')}</select>${drawingEvidenceSettings(S.models,drawingSelection,S.drawingRecognitionMethod)}<p class="hint">修改解析配置后，请重新解析需更新的文件。原文件会保留。</p>`,async f=>{
  const body={name:f.get('name'),description:f.get('description'),chunk_method:f.get('chunk_method'),parser_config:{...(edit?k.parser_config:{}),chunk_size:Number(f.get('chunk_size')),chunk_overlap:Number(f.get('chunk_overlap')),drawing_vision_model:f.get('drawing_vision_model')}};
  if(f.get('embedding_model'))body.embedding_model=f.get('embedding_model');
  const r=await data(edit?'PUT':'POST',edit?ds(k.id):'/api/v1/datasets',body);if(!edit){S.kb=r.id;resetKbView();}
  await refreshKbs();await loadDocs();toast(edit?'配置已保存；如有解析变更，请重新解析文件':'知识库已创建');
  });
 }bind('createKb',()=>kbForm());bind('editKb',()=>kbForm(true));
+$('modalBody').addEventListener('click',event=>{
+ const link=event.target.closest('a[href="#models"]');
+ if(link){$('modal').close();$('resetModelConnection').click();$('configModelType').value='vision';$('configModelType').dispatchEvent(new Event('change'));}
+});
 function stage(n,text,error=false){document.querySelectorAll('[data-stage]').forEach(e=>e.classList.toggle('active',+e.dataset.stage<=n));$('reviewStatus').textContent=text;$('reviewStatus').classList.toggle('error',error);}
 function showStructuredReport(report){
   S.structuredReport=report;S.report=reportMarkdown(report);S.reportMeta=`项目：${report.title}\n时间：${report.createdAt}`;
@@ -704,9 +709,9 @@ bind('retrieve',async()=>{
 function updateModelName(){const select=$('chatModel'),chat=S.chats.find(c=>c.id===$('assistantSelect').value);const configured=chat?.llm_id||chat?.tenant_llm_id||chat?.llm?.model_name;const fallback=S.defaults.find(m=>m.model_type==='chat');const found=S.models.find(m=>m.model_id===configured||modelValue(m)===configured||m.name===configured);const label=found?`${found.name} · ${found.instance_name}`:configured||fallback?.model_name||'尚未配置默认模型';if(select.options[0])select.options[0].textContent=`${label}（助手 / 默认）`;const text=select.selectedOptions[0]?.textContent||label;select.title=text;}
 $('chatModel').onchange=updateModelName;
 function renderModels(){
-  for(const id of ['quickModel','chatModel'])setOptions($(id),modelOptions('chat'),id==='quickModel'?'使用默认对话模型':'使用助手模型 / 默认模型');$('modelList').innerHTML=S.models.map(m=>`<article class="model-card"><h3>${esc(m.name)}</h3><p class="hint">${esc(m.provider_name)} / ${esc(m.instance_name)}</p>${(Array.isArray(m.model_type)?m.model_type:[m.model_type]).map(t=>`<span class="badge">${esc(t)}</span>`).join('')}</article>`).join('')||empty('尚未配置模型');
+  for(const id of ['quickModel','chatModel'])setOptions($(id),modelOptions('chat'),id==='quickModel'?'使用默认对话模型':'使用助手模型 / 默认模型');$('modelList').innerHTML=S.models.map(m=>`<article class="model-card"><h3>${esc(m.name)}</h3><p class="hint">${esc(m.provider_name)} / ${esc(m.instance_name)}</p>${(Array.isArray(m.model_type)?m.model_type:[m.model_type]).map(t=>`<span class="badge">${esc(modelTypeLabels[t]||t)}</span>`).join('')}</article>`).join('')||empty('尚未配置模型');
   const defaults=$('defaultModels');
-  const names={chat:'对话模型',embedding:'嵌入模型',rerank:'重排模型'};
+  const names=modelTypeLabels;
   defaults.innerHTML=Object.entries(names).map(([type,label])=>{
     const options=S.models.filter(model=>[model.model_type].flat().includes(type));
     const defaultId=S.defaults.find(model=>model.model_type===type&&model.configured!==false)?.model_id;

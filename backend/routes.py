@@ -11,7 +11,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .db import dumps, now, uid
 from .drawing_evidence import DrawingReviewInput
-from .models import provider_error
+from .models import MODEL_TYPES, provider_error
 from .parsers import ALLOWED_EXTENSIONS, TEXT_EXTENSIONS
 from .security import require_user
 
@@ -211,7 +211,7 @@ def make_api(db, models, knowledge, retrieval, chat):
     @router.patch("/models/default")
     def update_defaults(body: dict = Body(...)):
         kind = body.get("model_type", "")
-        if kind not in {"chat", "embedding", "rerank"}:
+        if kind not in MODEL_TYPES:
             raise HTTPException(400, "模型类型无效")
         models.set_default(kind, body.get("model_id", ""))
         return ok(models.defaults())

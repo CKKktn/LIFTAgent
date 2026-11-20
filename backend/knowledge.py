@@ -57,8 +57,8 @@ class KnowledgeService:
         if "drawing_vision_model" in (body.get("parser_config") or {}):
             vision_model = config["drawing_vision_model"]
             if not isinstance(vision_model, str):
-                raise HTTPException(400, "图纸识别模型必须是已配置的对话模型")
-            config["drawing_vision_model"] = self.models.find(vision_model, "chat")["id"] if vision_model else ""
+                raise HTTPException(400, "请在模型设置中配置视觉模型后选择")
+            config["drawing_vision_model"] = self.models.vision_config(vision_model)["id"] if vision_model else ""
         if not 200 <= int(config.get("chunk_size", 1000)) <= 6000 or not 0 <= int(config.get("chunk_overlap", 120)) < int(config.get("chunk_size", 1000)):
             raise HTTPException(400, "分块长度应为 200–6000，重叠长度应小于分块长度")
         value = {**(previous or {}), "id": identifier or uid(), "name": name,
@@ -321,7 +321,7 @@ class KnowledgeService:
                     if not self._current(row["id"], generation):
                         break
                     if model is None:
-                        model = self.models.chat(vision_model, temperature=0, max_tokens=8192)
+                        model = self.models.vision(vision_model, temperature=0, max_tokens=8192)
                         model = model.model_copy(update={"streaming": False})
                     kind, text, records, page_warnings = read_drawing_page(model, page)
                 warnings.extend(f"第 {page.number} 页 {warning}" for warning in page_warnings)

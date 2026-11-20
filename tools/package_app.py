@@ -16,7 +16,7 @@ FILES = ["README.md", "THIRD_PARTY_NOTICES.md", ".env.example", ".gitignore", "p
     "tests/browser/quick_review_fixture.py", "tests/browser/verify_handoff_ui.py",
     "tests/test_collab_workflow.py", "tests/test_collab_engine.py", "tests/test_collab_jobs.mjs", "tests/browser/verify_collab_ui.py",
     "tests/test_collab_recovery.py", "tests/helpers/review_graph.mjs",
-    "tests/test_drawing_evidence.py", "tests/test_drawing_evidence_ui.mjs", "tests/test_drawing_sources.py"]
+    "tests/test_drawing_evidence.py", "tests/test_drawing_evidence_ui.mjs", "tests/test_drawing_sources.py", "tests/test_visual_models.py"]
 DIRECTORIES = ["backend", "frontend", "examples"]
 
 
