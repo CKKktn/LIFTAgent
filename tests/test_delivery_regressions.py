@@ -11,6 +11,33 @@ from test_review_engine import engine_workspace, extracted, prepared, force_answ
 from backend.review_engine import ReviewOutputError
 
 
+@pytest.mark.parametrize("base,expected_path", [
+    ("https://synthetic.invalid/v1", "/v1/rerank"),
+    ("https://synthetic.invalid/v1/rerank/", "/v1/rerank"),
+    ("https://synthetic.invalid/compatible-api/v1", "/compatible-api/v1/reranks"),
+    ("https://synthetic.invalid/compatible-api/v1/reranks", "/compatible-api/v1/reranks"),
+    ("https://synthetic.invalid/compatible-api/v1/reranks/", "/compatible-api/v1/reranks"),
+])
+def test_rerank_connection_preserves_complete_endpoint(workspace, monkeypatch, base, expected_path):
+    app, client = workspace
+    model = app.state.models.save({"name": "synthetic-reranker", "model_type": "rerank", "base_url": base})
+    def respond(request):
+        if request.url.path != expected_path:
+            return httpx.Response(404)
+        payload = json.loads(request.content)
+        assert payload["model"] == "synthetic-reranker"
+        assert len(payload["documents"]) == 2
+        return httpx.Response(200, json={"results": [
+            {"index": 0, "relevance_score": .9}, {"index": 1, "relevance_score": .1}]})
+    original = httpx.Client
+    monkeypatch.setattr("backend.retrieval.httpx.Client",
+        lambda **kwargs: original(transport=httpx.MockTransport(respond), **kwargs))
+    response = client.post("/settings/models/" + model["id"] + "/test")
+    assert response.status_code == 200, response.text
+    assert response.json()["success"] is True
+
+
+
 def test_failed_upload_batch_keeps_neither_files_nor_rows(workspace):
     app, client = workspace
     kb = first_dataset(client)

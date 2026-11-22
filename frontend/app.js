@@ -1,16 +1,17 @@
 import {buildReportHtml,reportHtmlFilename} from './report-export.js';
 import {renderReportWorkspace,bindReportWorkspace} from './report-workspace.js';
-import {setupModelSettings} from './model-settings.js';
+import {setupModelSettings,modelTypeLabels} from './model-settings.js';
 import {CollabJobClient,isCollabJobRunning,isCollabJobUnresolved,collabReplyLabel,collabWorkflowHtml,mergeCollabMessages} from './collab-jobs.js';
 import {getDefaultChatModel} from './review-state.js';
 import {ReviewJobClient,isReviewJobBusy,reviewJobAction,workflowGraphHtml,workflowGraphSvg,workflowOverviewSvg,workflowAcademicSvg,mountWorkflowInspector} from './review-jobs.js';
 import {api,arrayOf,completion,proxyUrl,request,readSSE} from './api.js';
-import {uploadSkipReason,uploadFileName} from './upload-filter.js';
+import {uploadSkipReason,uploadFileName,collectDocumentIds} from './upload-filter.js';
 import {confirmedRequirements,requirementEditorHtml,mountRequirementEditor} from './three-stage-review.js';
 import {openFile} from './viewer.js';
+import {drawingEvidenceSettings,drawingFile} from './drawing-evidence.js';
 import {reportMarkdown} from './review.js';
-import {$,esc,toast,busy,empty,setOptions,fileIcon,date,download,loadLocal,saveLocal,answerHtml,sourcesHtml,modal,confirmAction} from './ui.js';
-const S={datasets:[],chats:[],models:[],defaults:[],kb:'',quickKb:'',docs:[],docPage:1,chunkPage:1,sessionPage:1,selected:new Set(),baselineSelected:new Map(),doc:null,chunks:[],session:'',messages:[],report:'',reportMeta:'',page:'quick'};
+import {$,esc,toast,busy,empty,setOptions,fileIcon,date,download,loadLocal,saveLocal,answerHtml,sourcesHtml,modal,confirmAction,drawingEvidenceOf} from './ui.js';
+const S={datasets:[],chats:[],models:[],defaults:[],kb:'',quickKb:'',docs:[],docPage:1,chunkPage:1,sessionPage:1,selected:new Set(),docTotal:0,selectionEpoch:0,selectingDocuments:false,baselineSelected:new Map(),doc:null,chunks:[],session:'',messages:[],report:'',reportMeta:'',page:'quick'};
 const data=async(method,path,body,signal)=>(await api(method,path,body,signal)).data;
 const ds=(id=S.kb)=>`/api/v1/datasets/${encodeURIComponent(id)}`;
 const docPath=(id=S.doc?.id,kb=S.kb)=>`${ds(kb)}/documents/${encodeURIComponent(id)}`;
@@ -40,6 +41,7 @@ function setChunkDocument(doc=null,message='点击「选择已解析文件」查
   pager('chunks',1,0,10);
 }
 function resetKbView(){
+  S.selectionEpoch++;
   S.docPage=1;
   S.selected.clear();
   $('chooseChunkDocument').disabled=!S.kb;
@@ -111,7 +113,43 @@ async function loadQuick(){
   const k=S.datasets.find(k=>k.id===S.quickKb);
   $('quickScope').textContent=k?`审查范围：${k.name} 的全部已解析内容。合同和技术协议仅作为要求依据，不作为完成证明。`:'请先选择需要审查的知识库。';
 }
-async function loadDocs(){if(!S.kb){S.docs=[];$('docRows').innerHTML='<tr><td colspan="8">暂无知识库，请先创建</td></tr>';$('docTotal').textContent='0 个文件';$('selectedDocCount').textContent='已选 0 项';$('docsSummary').textContent='';$('selectAllDocs').checked=false;pager('docs',1,0,20);return;}const id=S.kb,p=S.docPage,q=$('docSearch').value;const r=await data('GET',`${ds(id)}/documents?page=${p}&page_size=20&keywords=${encodeURIComponent(q)}`);if(id!==S.kb||p!==S.docPage||q!==$('docSearch').value)return;S.docs=arrayOf(r);$('docTotal').textContent=`${r.total||0} 个文件`;$('docsSummary').textContent=`已选 ${S.selected.size} 项`;$('selectedDocCount').textContent=`已选 ${S.selected.size} 项`;$('selectAllDocs').checked=S.docs.length>0&&S.docs.every(d=>S.selected.has(d.id));$('docRows').innerHTML=S.docs.map(d=>`<tr><td><input type="checkbox" data-check="${esc(d.id)}" ${S.selected.has(d.id)?'checked':''} aria-label="选择 ${esc(d.name)}"></td><td><button class="doc-name" data-open="${esc(d.id)}">${fileIcon(d.name)}${esc(d.name)}</button></td><td>${esc(date(d.create_time||d.create_date))}</td><td><button class="toggle-dot ${String(d.status)!=='0'?'on':''}" data-toggle="${esc(d.id)}" aria-label="切换 ${esc(d.name)} 启用状态"></button></td><td>${d.chunk_count||0}</td><td>${esc(chunkLabel(d.chunk_method))}</td><td><span class="badge ${d.run==='DONE'?'done':d.run==='RUNNING'?'running':d.run==='FAIL'?'failed':''}">${esc(status(d))}</span></td><td><a class="icon-btn" href="${proxyUrl(docPath(d.id,id))}" download title="下载">↓</a><button class="icon-btn" data-edit="${esc(d.id)}" aria-label="文件设置">⋯</button></td></tr>`).join('')||'<tr><td colspan="8">暂无文件</td></tr>';pager('docs',p,r.total||0,20);$('docRows').querySelectorAll('[data-check]').forEach(c=>c.onchange=()=>{c.checked?S.selected.add(c.dataset.check):S.selected.delete(c.dataset.check);$('selectedDocCount').textContent=`已选 ${S.selected.size} 项`;});$('docRows').querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>busy(b,async()=>{const doc=S.docs.find(d=>d.id===b.dataset.open);if(doc)await openFile({...doc,document_id:doc.id,dataset_id:id});}));$('docRows').querySelectorAll('[data-toggle]').forEach(b=>b.onclick=()=>busy(b,async()=>{const d=S.docs.find(d=>d.id===b.dataset.toggle);await data('PATCH',docPath(d.id,id),{enabled:String(d.status)==='0'?1:0});await loadDocs();}));$('docRows').querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>{const d=S.docs.find(d=>d.id===b.dataset.edit);modal('文件设置',`<label>名称</label><input name="name" required value="${esc(d.name)}"><label>解析状态</label><pre class="chunk-content">${esc(d.progress_msg||status(d))}</pre>`,async f=>{await data('PATCH',docPath(d.id,id),{name:f.get('name')});await loadDocs();});});}
+function syncDocSelection(){
+  const count=S.selected.size,all=S.docTotal>0&&count===S.docTotal;
+  $('selectedDocCount').textContent=$('docsSummary').textContent=`已选 ${count} 项`;
+  const header=$('selectAllDocs'),pageCount=S.docs.filter(doc=>S.selected.has(doc.id)).length;
+  header.checked=S.docs.length>0&&pageCount===S.docs.length;
+  header.indeterminate=pageCount>0&&pageCount<S.docs.length;
+  $('docRows').querySelectorAll('[data-check]').forEach(box=>box.checked=S.selected.has(box.dataset.check));
+  const button=$('selectAllDocumentResults');
+  button.textContent=all?'取消全选':'全选';
+  button.setAttribute('aria-pressed',String(all));
+}
+bind('selectAllDocumentResults',async()=>{
+  if(!S.kb)throw Error('请先选择知识库');
+  if(S.docTotal>0&&S.selected.size===S.docTotal){S.selectionEpoch++;S.selected.clear();syncDocSelection();return;}
+  const kb=S.kb,q=$('docSearch').value,epoch=++S.selectionEpoch;
+  $('selectAllDocumentResults').textContent='正在全选…';
+  S.selectingDocuments=true;
+  try{
+    const ids=await collectDocumentIds(async page=>{
+      const result=await data('GET',`${ds(kb)}/documents?page=${page}&page_size=100&keywords=${encodeURIComponent(q)}`);
+      return {docs:arrayOf(result),total:result.total};
+    },()=>S.kb===kb&&$('docSearch').value===q&&S.selectionEpoch===epoch);
+    if(ids)S.selected=ids;
+  }finally{S.selectingDocuments=false;syncDocSelection();}
+});
+async function loadDocs(){if(!S.kb){S.docs=[];$('docRows').innerHTML='<tr><td colspan="8">暂无知识库，请先创建</td></tr>';$('docTotal').textContent='0 个文件';$('selectedDocCount').textContent='已选 0 项';$('docsSummary').textContent='';$('selectAllDocs').checked=false;S.docTotal=0;syncDocSelection();pager('docs',1,0,20);return;}const id=S.kb,p=S.docPage,q=$('docSearch').value;const r=await data('GET',`${ds(id)}/documents?page=${p}&page_size=20&keywords=${encodeURIComponent(q)}`);if(id!==S.kb||p!==S.docPage||q!==$('docSearch').value)return;S.docs=arrayOf(r);$('docTotal').textContent=`${r.total||0} 个文件`;S.docTotal=r.total||0;syncDocSelection();$('docRows').innerHTML=S.docs.map(d=>`<tr><td><input type="checkbox" data-check="${esc(d.id)}" ${S.selected.has(d.id)?'checked':''} aria-label="选择 ${esc(d.name)}"></td><td><button class="doc-name" data-open="${esc(d.id)}">${fileIcon(d.name)}${esc(d.name)}</button></td><td>${esc(date(d.create_time||d.create_date))}</td><td><button class="toggle-dot ${String(d.status)!=='0'?'on':''}" data-toggle="${esc(d.id)}" aria-label="切换 ${esc(d.name)} 启用状态"></button></td><td>${d.chunk_count||0}</td><td>${esc(chunkLabel(d.chunk_method))}</td><td><span class="badge ${d.run==='DONE'?'done':d.run==='RUNNING'?'running':d.run==='FAIL'?'failed':''}">${esc(status(d))}</span></td><td><a class="icon-btn" href="${proxyUrl(docPath(d.id,id))}" download title="下载">↓</a>${drawingFile(d.name)?`<button type="button" class="btn subtle small" data-file-source="${esc(JSON.stringify({document_id:d.id,dataset_id:id,document_name:d.name,drawing_table:true}))}" aria-label="查看 ${esc(d.name)} 的图纸证据">图纸证据</button>`:''}<button class="icon-btn" data-edit="${esc(d.id)}" aria-label="文件设置">⋯</button></td></tr>`).join('')||'<tr><td colspan="8">暂无文件</td></tr>';pager('docs',p,r.total||0,20);$('docRows').querySelectorAll('[data-check]').forEach(c=>c.onchange=()=>{S.selectionEpoch++;c.checked?S.selected.add(c.dataset.check):S.selected.delete(c.dataset.check);syncDocSelection();});$('docRows').querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>busy(b,async()=>{const doc=S.docs.find(d=>d.id===b.dataset.open);if(doc)await openFile({...doc,document_id:doc.id,dataset_id:id});}));$('docRows').querySelectorAll('[data-toggle]').forEach(b=>b.onclick=()=>busy(b,async()=>{const d=S.docs.find(d=>d.id===b.dataset.toggle);await data('PATCH',docPath(d.id,id),{enabled:String(d.status)==='0'?1:0});await loadDocs();}));$('docRows').querySelectorAll('[data-edit]').forEach(button=>button.onclick=()=>editDocument(S.docs.find(doc=>doc.id===button.dataset.edit),id));}
+function editDocument(doc,kb){
+ if(!doc)return;
+ const pdf=/\.pdf$/i.test(doc.name);
+ const pdfSetting=pdf?`<label class="row"><input type="checkbox" name="draw_every_pdf_page" ${doc.draw_every_pdf_page?'checked':''}>识别此 PDF 的所有页面</label><p class="hint">启用图纸识别后，重新解析此文件会将每一页的图像发送至所选模型 API。</p>`:'';
+ modal('文件设置',`<label>名称</label><input name="name" required value="${esc(doc.name)}">${pdfSetting}<label>解析状态</label><pre class="chunk-content">${esc(doc.progress_msg||status(doc))}</pre>`,async f=>{
+  const changes={name:f.get('name')};
+  if(pdf)changes.draw_every_pdf_page=f.has('draw_every_pdf_page');
+  await data('PATCH',docPath(doc.id,kb),changes);
+  await loadDocs();
+ });
+}
 let chunkRequest=0;
 async function loadChunks(page=S.chunkPage){
   const {doc,kb}=S;
@@ -131,7 +169,7 @@ async function loadChunks(page=S.chunkPage){
   S.chunkPage=page;
   S.chunks=arrayOf(result);
   list.innerHTML=S.chunks.map((chunk,index)=>`<div class="chunk">
-    <div class="chunk-head"><span>切片 ${(page-1)*10+index+1}</span><button class="text-btn" data-edit="${index}">编辑</button></div>
+    <div class="chunk-head"><span>切片 ${(page-1)*10+index+1}</span><div class="row">${drawingEvidenceOf(chunk)?`<button type="button" class="text-btn" data-file-source="${esc(JSON.stringify({document_id:doc.id,dataset_id:kb,document_name:doc.name,drawing_evidence:drawingEvidenceOf(chunk)}))}">定位图纸证据</button>`:`<button class="text-btn" data-edit="${index}">编辑</button>`}</div></div>
     <div class="chunk-content">${esc(chunk.content||chunk.content_with_weight)}</div>
   </div>`).join('')||empty('该文件暂无切片');
   list.scrollTop=0;
@@ -141,7 +179,7 @@ async function loadChunks(page=S.chunkPage){
   list.querySelectorAll('[data-edit]').forEach(button=>button.onclick=()=>editChunk(S.chunks[+button.dataset.edit]));
 }
 function editChunk(c){if(!S.doc)return toast('先选择文件',true);const path=docPath();modal(c?'编辑切片':'添加切片',`<label>切片内容</label><textarea name="content" rows="12" required>${esc(c?.content||c?.content_with_weight||'')}</textarea>`,async f=>{await data(c?'PATCH':'POST',path+'/chunks'+(c?'/'+c.id:''),{content:f.get('content')});await loadChunks();await loadDocs();});}bind('addChunk',()=>editChunk());
-$('selectAllDocs').onchange=e=>{S.docs.forEach(d=>e.target.checked?S.selected.add(d.id):S.selected.delete(d.id));busy(null,loadDocs);};let searchTimer;$('docSearch').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>{S.docPage=1;S.selected.clear();busy(null,loadDocs);},300);};
+$('selectAllDocs').onchange=e=>{S.selectionEpoch++;S.docs.forEach(d=>e.target.checked?S.selected.add(d.id):S.selected.delete(d.id));syncDocSelection();};let searchTimer;$('docSearch').oninput=()=>{S.selectionEpoch++;clearTimeout(searchTimer);searchTimer=setTimeout(()=>{S.docPage=1;S.selected.clear();busy(null,loadDocs);},300);};
 for(const [suffix,delta] of [['Prev',-1],['Next',1]]){
   $('chunks'+suffix).onclick=()=>busy(null,()=>loadChunks(S.chunkPage+delta));
   for(const [prefix,key,fn] of [['docs','docPage',loadDocs],['sessions','sessionPage',loadSessions]])bind(prefix+suffix,async()=>{S[key]=Math.max(1,S[key]+delta);await fn();});
@@ -179,20 +217,25 @@ async function uploadKnowledgeFiles(files,kb){
 for(const id of ['kbUpload','kbFolderUpload'])$(id).onchange=e=>{const files=[...e.target.files],kb=S.kb;e.target.value='';busy(null,()=>uploadKnowledgeFiles(files,kb));};
 $('quickDrop').ondragover=e=>{e.preventDefault();e.currentTarget.classList.add('dragging');};$('quickDrop').ondragleave=e=>e.currentTarget.classList.remove('dragging');$('quickDrop').ondrop=e=>{e.preventDefault();e.currentTarget.classList.remove('dragging');busy(null,async()=>{if(S.reviewAbort)throw Error('请先停止审查');await upload([...e.dataTransfer.files],S.quickKb,true);});};
 async function parse(kb,ids,stop=false,signal){const k=S.datasets.find(k=>k.id===kb);return k?.pipeline_id?data('POST','/api/v1/documents/ingest',{doc_ids:ids,run:stop?'2':'1',delete:false},signal):data(stop?'DELETE':'POST',`${ds(kb)}/chunks`,{document_ids:ids},signal);}
-for(const [id,stop] of [['parseDocs',false],['stopParse',true]])bind(id,async()=>{if(!S.selected.size)throw Error('请先勾选文件');await parse(S.kb,[...S.selected],stop);toast(stop?'已提交取消解析':'已提交解析任务');await loadDocs();});
+for(const [id,stop] of [['parseDocs',false],['stopParse',true]])bind(id,async()=>{if(S.selectingDocuments)throw Error('正在全选文件，请稍候');if(!S.selected.size)throw Error('请先勾选文件');await parse(S.kb,[...S.selected],stop);toast(stop?'已提交取消解析':'已提交解析任务');await loadDocs();});
 bind('deleteDocs',()=>{if(!S.selected.size)throw Error('请先勾选文件');const kb=S.kb,ids=[...S.selected];confirmAction('删除文件',`确定删除所选 ${ids.length} 个文件及其切片？`,async()=>{await data('DELETE',`${ds(kb)}/documents`,{ids});S.selected.clear();if(S.kb===kb&&ids.includes(S.doc?.id))setChunkDocument(null,'文件已删除，请重新选择');await refreshKbs();await Promise.all([loadDocs(),loadQuick()]);});});
 function kbForm(edit=false){
  const k=S.datasets.find(k=>k.id===S.kb);if(edit&&!k)return;
  const current=edit?S.models.find(m=>m.model_id===k.embedding_model):null;
  const selected=current?modelValue(current):'';
+ const drawingSelection=edit?k.parser_config?.drawing_vision_model:S.defaults.find(m=>m.model_type==='vision'&&m.configured!==false)?.model_id;
  const methods=[['naive','通用分块'],['one','每页 / 每个工作表整篇'],['laws','法律条款'],['table','表格 / 按行']];
- modal(edit?'知识库配置':'创建知识库',`<label>名称</label><input name="name" required value="${esc(edit?k.name:'')}"><label>描述</label><textarea name="description">${esc(edit?k.description||'':'')}</textarea><label>分块方法</label><select name="chunk_method">${methods.map(([v,l])=>`<option value="${v}" ${edit&&k.chunk_method===v?'selected':''}>${l}</option>`).join('')}</select><label>分块长度（字符）</label><input name="chunk_size" type="number" min="200" max="6000" value="${edit?k.parser_config?.chunk_size||1000:1000}"><label>重叠长度</label><input name="chunk_overlap" type="number" min="0" max="1999" value="${edit?k.parser_config?.chunk_overlap??120:120}"><label>嵌入模型</label><select name="embedding_model"><option value="">使用默认模型</option>${modelOptions('embedding').map(m=>`<option value="${esc(m.value)}" ${m.value===selected?'selected':''}>${esc(m.label)}</option>`).join('')}</select><p class="hint">修改分块或嵌入配置后，已有文档需要重新解析；原文件保留。扫描件请先完成 OCR。</p>`,async f=>{
- const body={name:f.get('name'),description:f.get('description'),chunk_method:f.get('chunk_method'),parser_config:{chunk_size:Number(f.get('chunk_size')),chunk_overlap:Number(f.get('chunk_overlap'))}};
+ modal(edit?'知识库配置':'创建知识库',`<label>名称</label><input name="name" required value="${esc(edit?k.name:'')}"><label>描述</label><textarea name="description">${esc(edit?k.description||'':'')}</textarea><label>分块方法</label><select name="chunk_method">${methods.map(([v,l])=>`<option value="${v}" ${edit&&k.chunk_method===v?'selected':''}>${l}</option>`).join('')}</select><label>分块长度（字符）</label><input name="chunk_size" type="number" min="200" max="6000" value="${edit?k.parser_config?.chunk_size||1000:1000}"><label>重叠长度</label><input name="chunk_overlap" type="number" min="0" max="1999" value="${edit?k.parser_config?.chunk_overlap??120:120}"><label>嵌入模型</label><select name="embedding_model"><option value="">使用默认模型</option>${modelOptions('embedding').map(m=>`<option value="${esc(m.value)}" ${m.value===selected?'selected':''}>${esc(m.label)}</option>`).join('')}</select>${drawingEvidenceSettings(S.models,drawingSelection,S.drawingRecognitionMethod)}<p class="hint">修改解析配置后，请重新解析需更新的文件。原文件会保留。</p>`,async f=>{
+ const body={name:f.get('name'),description:f.get('description'),chunk_method:f.get('chunk_method'),parser_config:{...(edit?k.parser_config:{}),chunk_size:Number(f.get('chunk_size')),chunk_overlap:Number(f.get('chunk_overlap')),drawing_vision_model:f.get('drawing_vision_model')}};
  if(f.get('embedding_model'))body.embedding_model=f.get('embedding_model');
  const r=await data(edit?'PUT':'POST',edit?ds(k.id):'/api/v1/datasets',body);if(!edit){S.kb=r.id;resetKbView();}
  await refreshKbs();await loadDocs();toast(edit?'配置已保存；如有解析变更，请重新解析文件':'知识库已创建');
  });
 }bind('createKb',()=>kbForm());bind('editKb',()=>kbForm(true));
+$('modalBody').addEventListener('click',event=>{
+ const link=event.target.closest('a[href="#models"]');
+ if(link){$('modal').close();$('resetModelConnection').click();$('configModelType').value='vision';$('configModelType').dispatchEvent(new Event('change'));}
+});
 function stage(n,text,error=false){document.querySelectorAll('[data-stage]').forEach(e=>e.classList.toggle('active',+e.dataset.stage<=n));$('reviewStatus').textContent=text;$('reviewStatus').classList.toggle('error',error);}
 function showStructuredReport(report){
   S.structuredReport=report;S.report=reportMarkdown(report);S.reportMeta=`项目：${report.title}\n时间：${report.createdAt}`;
@@ -692,9 +735,9 @@ bind('retrieve',async()=>{
 function updateModelName(){const select=$('chatModel'),chat=S.chats.find(c=>c.id===$('assistantSelect').value);const configured=chat?.llm_id||chat?.tenant_llm_id||chat?.llm?.model_name;const fallback=S.defaults.find(m=>m.model_type==='chat');const found=S.models.find(m=>m.model_id===configured||modelValue(m)===configured||m.name===configured);const label=found?`${found.name} · ${found.instance_name}`:configured||fallback?.model_name||'尚未配置默认模型';if(select.options[0])select.options[0].textContent=`${label}（助手 / 默认）`;const text=select.selectedOptions[0]?.textContent||label;select.title=text;}
 $('chatModel').onchange=updateModelName;
 function renderModels(){
-  for(const id of ['quickModel','chatModel'])setOptions($(id),modelOptions('chat'),id==='quickModel'?'使用默认对话模型':'使用助手模型 / 默认模型');$('modelList').innerHTML=S.models.map(m=>`<article class="model-card"><h3>${esc(m.name)}</h3><p class="hint">${esc(m.provider_name)} / ${esc(m.instance_name)}</p>${(Array.isArray(m.model_type)?m.model_type:[m.model_type]).map(t=>`<span class="badge">${esc(t)}</span>`).join('')}</article>`).join('')||empty('尚未配置模型');
+  for(const id of ['quickModel','chatModel'])setOptions($(id),modelOptions('chat'),id==='quickModel'?'使用默认对话模型':'使用助手模型 / 默认模型');$('modelList').innerHTML=S.models.map(m=>`<article class="model-card"><h3>${esc(m.name)}</h3><p class="hint">${esc(m.provider_name)} / ${esc(m.instance_name)}</p>${(Array.isArray(m.model_type)?m.model_type:[m.model_type]).map(t=>`<span class="badge">${esc(modelTypeLabels[t]||t)}</span>`).join('')}</article>`).join('')||empty('尚未配置模型');
   const defaults=$('defaultModels');
-  const names={chat:'对话模型',embedding:'嵌入模型',rerank:'重排模型'};
+  const names=modelTypeLabels;
   defaults.innerHTML=Object.entries(names).map(([type,label])=>{
     const options=S.models.filter(model=>[model.model_type].flat().includes(type));
     const defaultId=S.defaults.find(model=>model.model_type===type&&model.configured!==false)?.model_id;
@@ -738,7 +781,7 @@ function renderModels(){
   });
 }
 bind('runApi',async()=>{const method=$('apiMethod').value,path=$('apiPath').value.trim();if(/[{}]/.test(path))throw Error('请将路径中的占位符替换为真实参数');const body=$('apiBody').value.trim()?JSON.parse($('apiBody').value):undefined;const run=async()=>{$('apiResponse').textContent='正在请求…';try{const r=await request(method,path,method==='GET'?undefined:body);if(r.headers.get('content-type')?.includes('text/event-stream')){await readSSE(r,d=>$('apiResponse').textContent=JSON.stringify(d,null,2));}else if(r.headers.get('content-type')?.includes('json'))$('apiResponse').textContent=`HTTP ${r.status}\n`+JSON.stringify(await r.json(),null,2);else{const blob=await r.blob();download('response.bin',blob,blob.type);$('apiResponse').textContent=`HTTP ${r.status} · 已下载二进制响应 (${blob.size} bytes)`;}}catch(e){$('apiResponse').textContent=e.message;throw e;}};if(method==='GET')await run();else confirmAction('执行接口请求',`${method} ${path} 将直接作用于 本地服务 的真实数据。`,run);});
-async function init(){const config=await(await fetch('/config')).json();S.nativeBase=config.base;$('nativeModels').onclick=()=>document.getElementById('modelConnectionForm').scrollIntoView({behavior:'smooth'});if(!config.configured)throw Error('本地服务尚未就绪');const results=await Promise.allSettled([refreshKbs(),data('GET','/api/v1/chats?page_size=100'),data('GET','/api/v1/models'),data('GET','/api/v1/models/default')]);const errors=results.map((r,i)=>r.status==='rejected'?['知识库','助手','模型','默认模型'][i]+'：'+r.reason.message:null).filter(Boolean);if(results[1].status==='fulfilled')S.chats=arrayOf(results[1].value);if(results[2].status==='fulfilled')S.models=arrayOf(results[2].value);if(results[3].status==='fulfilled')S.defaults=arrayOf(results[3].value);renderModels();renderAssistants();if(!$('assistantSelect').value){const view=loadLocal('lift-collab-view',{});$('assistantSelect').value=S.chats.some(chat=>chat.id===view.chat_id)?view.chat_id:S.chats[0]?.id||'';}$('connection').textContent=errors.length?'部分接口不可用':config.llm_configured?'服务已连接':'服务已连接 · 待配置模型';await Promise.allSettled([loadQuick(),loadDocs(),changeAssistant()]).then(rs=>rs.forEach(r=>{if(r.status==='rejected')errors.push(r.reason.message);}));if(errors.length)toast(errors.join('；'),true);}
+async function init(){const config=await(await fetch('/config')).json();S.nativeBase=config.base;S.drawingRecognitionMethod=config.drawing_recognition_method;$('nativeModels').onclick=()=>document.getElementById('modelConnectionForm').scrollIntoView({behavior:'smooth'});if(!config.configured)throw Error('本地服务尚未就绪');const results=await Promise.allSettled([refreshKbs(),data('GET','/api/v1/chats?page_size=100'),data('GET','/api/v1/models'),data('GET','/api/v1/models/default')]);const errors=results.map((r,i)=>r.status==='rejected'?['知识库','助手','模型','默认模型'][i]+'：'+r.reason.message:null).filter(Boolean);if(results[1].status==='fulfilled')S.chats=arrayOf(results[1].value);if(results[2].status==='fulfilled')S.models=arrayOf(results[2].value);if(results[3].status==='fulfilled')S.defaults=arrayOf(results[3].value);renderModels();renderAssistants();if(!$('assistantSelect').value){const view=loadLocal('lift-collab-view',{});$('assistantSelect').value=S.chats.some(chat=>chat.id===view.chat_id)?view.chat_id:S.chats[0]?.id||'';}$('connection').textContent=errors.length?'部分接口不可用':config.llm_configured?'服务已连接':'服务已连接 · 待配置模型';await Promise.allSettled([loadQuick(),loadDocs(),changeAssistant()]).then(rs=>rs.forEach(r=>{if(r.status==='rejected')errors.push(r.reason.message);}));if(errors.length)toast(errors.join('；'),true);}
 bind('reconnect',()=>{if(S.chatAbort||S.reviewAbort)throw Error('请先停止当前生成任务');return init();});busy(null,init).then(()=>restoreWorkflow()).catch(error=>toast('后台任务重连失败：'+error.message,true));fetch('/endpoints.json').then(r=>r.json()).then(list=>{list.push({name:'列出模型',method:'GET',path:'/api/v1/models'},{name:'读取默认模型',method:'GET',path:'/api/v1/models/default'});setOptions($('endpointPreset'),list.map((r,i)=>({value:String(i),label:`${r.method} ${r.name} · ${r.path}`})),'自定义请求');$('endpointPreset').onchange=e=>{const r=list[e.target.value];if(r){$('apiMethod').value=r.method;$('apiPath').value=r.path;$('apiBody').value='';}};}).catch(e=>toast(e.message,true));
 let polling=false;setInterval(async()=>{if(polling||document.hidden||S.page!=='knowledge'||!S.docs.some(d=>d.run==='RUNNING'))return;polling=true;try{await loadDocs();}catch(e){toast('刷新解析进度失败：'+e.message,true);}finally{polling=false;}},5000);
 

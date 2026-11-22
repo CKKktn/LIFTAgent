@@ -14,7 +14,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 class Settings:
     data_dir: Path
     frontend_dir: Path = PROJECT_ROOT / "frontend"
-    max_upload_mb: int = 30
+    max_upload_mb: int = 64
     secure_cookie: bool = False
     session_hours: int = 12
     max_document_characters: int = 2_000_000
@@ -31,7 +31,7 @@ class Settings:
             directory = PROJECT_ROOT / directory
         return cls(
             data_dir=directory.resolve(),
-            max_upload_mb=int(os.getenv("MAX_UPLOAD_MB", "30")),
+            max_upload_mb=int(os.getenv("MAX_UPLOAD_MB", "64")),
             secure_cookie=os.getenv("APP_SECURE_COOKIE", "false").lower() == "true",
             libreoffice_path=os.getenv("LIBREOFFICE_PATH", ""),
         )

@@ -6,11 +6,12 @@ import mimetypes
 from pathlib import PurePosixPath
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
 from .db import dumps, now, uid
-from .models import provider_error
+from .drawing_evidence import DrawingReviewInput
+from .models import MODEL_TYPES, provider_error
 from .parsers import ALLOWED_EXTENSIONS, TEXT_EXTENSIONS
 from .security import require_user
 
@@ -144,6 +145,28 @@ def make_api(db, models, knowledge, retrieval, chat):
         rows = [row for row in rows if (not keywords or keywords.casefold() in row["content"].casefold()) and (not id or row["id"] == id)]
         return ok({"chunks": [knowledge.chunk_view(row) for row in rows[(page - 1) * page_size:page * page_size]], "total": len(rows)})
 
+    @router.get("/datasets/{dataset_id}/documents/{document_id}/drawing-evidence")
+    def list_drawing_evidence(dataset_id: str, document_id: str, page: int = 1, page_size: int = 20):
+        page, page_size = page_values(page, page_size)
+        return ok(knowledge.drawing_records(dataset_id, document_id, page, page_size))
+
+    @router.get("/datasets/{dataset_id}/documents/{document_id}/drawing-evidence/{evidence_id}")
+    def get_drawing_evidence(dataset_id: str, document_id: str, evidence_id: str):
+        return ok(knowledge.drawing_record(dataset_id, document_id, evidence_id))
+
+    @router.get("/datasets/{dataset_id}/documents/{document_id}/drawing-evidence/{evidence_id}/image")
+    def drawing_evidence_image(dataset_id: str, document_id: str, evidence_id: str):
+        return Response(knowledge.drawing_image(dataset_id, document_id, evidence_id), media_type="image/png")
+
+    @router.patch("/datasets/{dataset_id}/documents/{document_id}/drawing-evidence/{evidence_id}")
+    def review_drawing_evidence(dataset_id: str, document_id: str, evidence_id: str, body: DrawingReviewInput):
+        try:
+            return ok(knowledge.review_drawing(dataset_id, document_id, evidence_id, body))
+        except HTTPException:
+            raise
+        except Exception as error:
+            raise HTTPException(503, provider_error(error)) from None
+
     @router.post("/datasets/{dataset_id}/documents/{document_id}/chunks")
     def add_chunk(dataset_id: str, document_id: str, body: dict = Body(...)):
         return ok(knowledge.save_chunk(dataset_id, document_id, body))
@@ -192,7 +215,7 @@ def make_api(db, models, knowledge, retrieval, chat):
     @router.patch("/models/default")
     def update_defaults(body: dict = Body(...)):
         kind = body.get("model_type", "")
-        if kind not in {"chat", "embedding", "rerank"}:
+        if kind not in MODEL_TYPES:
             raise HTTPException(400, "模型类型无效")
         models.set_default(kind, body.get("model_id", ""))
         return ok(models.defaults())

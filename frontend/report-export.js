@@ -1,4 +1,4 @@
-import {esc,evidenceKindInfo,evidenceReference,evidenceDisplayEntries} from './ui.js';
+import {esc,evidenceKindInfo,evidenceReference,evidenceDisplayEntries,drawingEvidenceOf,drawingCitation,drawingBox} from './ui.js';
 import {reviewQuestion} from './review.js';
 import {reportDetailFields,reportWorkspaceMetrics} from './report-workspace.js';
 
@@ -58,6 +58,8 @@ function phaseOf(report,metrics){
 }
 
 function pagesOf(source){
+  const drawing=drawingEvidenceOf(source);
+  if(drawing)return drawingCitation(drawing);
   const pages=[...list(source.page_num_int),...list(source.positions||source.position_int).map(position=>Array.isArray(position)?position[0]:null)];
   if(source.page!==undefined)pages.push(source.page);
   const valid=[...new Set(pages.map(Number).filter(page=>Number.isInteger(page)&&page>0))].sort((a,b)=>a-b);
@@ -84,7 +86,7 @@ function sourceRegistry(metrics){
     if(!record){record={...source,anchor:'source-'+(records.length+1),roles:new Set(),rows:new Map(),evidenceRows:new Set(),references:[]};records.push(record);byKey.set(key,record);}
     record.roles.add(role);record.rows.set(row.key,row);
     if(role==='结果证据')record.evidenceRows.add(row.key);
-    record.references.push({row,role,refId,quote:source.quote,location:source.location,sourceId:text(value?.source_id),kind:text(value?.kind),analysis:text(value?.analysis),
+    record.references.push({row,role,refId,quote:source.quote,location:source.location,drawingId:drawingEvidenceOf(source.source)?.id,drawingVersion:drawingEvidenceOf(source.source)?.version,sourceId:text(value?.source_id),kind:text(value?.kind),analysis:text(value?.analysis),
       referenceLabel:entry?evidenceReference(row.id,value,entry.index):row.id+' · 依据原文',aliases:entry?.aliases||[],isDocument:checkKind(row.requirement,row.result).isDocument});
     return record;
   };
@@ -186,7 +188,7 @@ function scopeSection(report,metrics){
 
 function sourceAppendix(registry){
   return `<section id="sources" class="section"><div class="section-head"><span>06</span><h2>依据与证据来源附录</h2></div><p class="section-intro">本文件保存引文、文件名、标识和已记录位置，可离线对照；不包含原始附件，也不依赖本机服务地址。正文已完整呈现引文，以下全文副本可展开查阅；打印时自动显示。需核验附件时，请回到系统按文档标识打开原件。</p>${registry.records.map(record=>{
-    const unique=new Map();for(const reference of record.references){const key=reference.role+'|'+reference.location+'|'+reference.quote;if(!unique.has(key))unique.set(key,{...reference,uses:[]});unique.get(key).uses.push(reference);}
+    const unique=new Map();for(const reference of record.references){const key=JSON.stringify([reference.role,reference.location,reference.drawingId,reference.drawingVersion,reference.quote]);if(!unique.has(key))unique.set(key,{...reference,uses:[]});unique.get(key).uses.push(reference);}
     return `<article id="${record.anchor}" class="source-card"><header><div><span class="eyebrow">${[...record.roles].map(esc).join(' / ')}</span><h3>${esc(record.name)}</h3></div><span class="tag">涉及 ${record.rows.size} 项要求</span></header><p class="source-meta">文档 ID：${esc(record.document_id||'未记录')} · 资料库 ID：${esc(record.dataset_id||'未记录')}</p><p>对应条目：${[...record.rows.values()].map(row=>`<a href="#requirement-${row.index+1}">${esc(row.id)}</a>`).join('、')}</p><details class="source-copy"><summary>展开该来源保存的 ${unique.size} 段完整引文副本</summary><div class="source-copy-content">${[...unique.values()].map(reference=>`<div class="source-excerpt"><p class="source-meta">${esc(reference.role)} · ${esc(reference.location)}</p><blockquote>${esc(nonempty(reference.quote,'未保存正文引文，仅保留文件或来源标识。'))}</blockquote><p class="caption">对应引用：${reference.uses.map(use=>`<a href="#${use.refId}">${esc(use.referenceLabel)}</a>${use.role==='结果证据'?'（'+esc(evidenceKindInfo(use.kind,{document:use.isDocument}).label)+'）':''}${use.aliases.filter(alias=>alias!==use.sourceId.trim()).length?'；同组原编号 '+use.aliases.filter(alias=>alias!==use.sourceId.trim()).map(alias=>esc(use.row.id+' · '+alias)).join('、'):''}`).join('；')}</p></div>`).join('')}</div></details></article>`;
   }).join('')||'<p class="notice">当前未保存可列示的依据或证据来源。</p>'}</section>`;
 }
@@ -199,6 +201,11 @@ function pick(value,keys){
 function cleanSource(value){
   const out=pick(value,['id','document_id','doc_id','dataset_id','kb_id','document_name','doc_name','name','ordinal','content','content_with_weight']);
   for(const key of ['page_num_int','positions','position_int'])if(Array.isArray(value?.[key]))out[key]=value[key].map(item=>Array.isArray(item)?item.filter(number=>typeof number==='number'&&Number.isFinite(number)):typeof item==='number'&&Number.isFinite(item)?item:null).filter(item=>item!==null);
+  const drawing=drawingEvidenceOf(value);
+  if(drawing){
+    out.drawing_evidence={...pick(drawing,['id','version','status','method','page_number','drawing_number','revision','view','object','annotation','meaning']),
+      annotation_box:drawingBox(drawing.annotation_box),object_box:drawingBox(drawing.object_box)};
+  }
   return out;
 }
 function cleanEvidence(value){return {...pick(value,['source_id','quote','analysis','kind','basis']),source:cleanSource(value?.source)};}

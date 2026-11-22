@@ -77,7 +77,7 @@ test('supported YAML and TSV files remain uploadable inside selected folders',()
   assert.equal(uploadSkipReason({name:'协议.odt',size:100}),'');
 });
 test('unsupported image and audio files are rejected before calling the parser',()=>{
-  for(const name of ['扫描件.jpg','录音.mp3'])assert.match(uploadSkipReason({name,size:100}),/本系统暂不支持/);
+  for(const name of ['图纸.gif','录音.mp3'])assert.match(uploadSkipReason({name,size:100}),/本系统暂不支持/);
 });
 test('temporary files and empty documents are still excluded',()=>{
   assert.equal(uploadSkipReason({name:'~$协议.docx',size:100}),'临时文件或系统文件');

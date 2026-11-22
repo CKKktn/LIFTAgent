@@ -71,9 +71,10 @@ def prepared(workspace):
     return workspace.engine.prepare(workspace.payload)
 
 
-def test_qwen_flash_embeds_full_parser_batch_with_provider_request_limit(engine_workspace, monkeypatch):
+@pytest.mark.parametrize("model_name", ["qwen3.7-text-embedding", "qwen3.7-text-embedding-flash"])
+def test_qwen_embeds_full_parser_batch_with_provider_request_limit(engine_workspace, monkeypatch, model_name):
     saved = engine_workspace.models.save({
-        "name": "qwen3.7-text-embedding-flash",
+        "name": model_name,
         "base_url": "https://synthetic.invalid/v1",
         "model_type": "embedding",
     })

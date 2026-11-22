@@ -8,4 +8,6 @@
 
 Python 依赖通过各自官方发布包安装，版本记录于 `requirements.lock.txt`，各包许可证仍适用。源码压缩包不包含 Python 解释器、已安装依赖、原站点接口数据或用户的本地工作空间。
 
+图纸 PDF 使用 [pypdfium2 5.15.2](https://pypi.org/project/pypdfium2/5.15.2/) 随官方 wheel 提供的 PDFium 在本地渲染。包内 `LICENSES/` 和 `BUILD_LICENSES/` 分别提供 Python 包及所附 PDFium 构建的许可证。
+
 `frontend/vendor/dagre/` 使用 Dagre 3.1.3（`@dagrejs/dagre`）为扩展工作流提供本地自动排版支持，来自官方 npm 注册表发布包，使用 MIT 许可证。当前已知流程采用语义约束的紧凑布局和避障路由。主许可证及随包的第三方声明分别保存在 `LICENSE` 和 `dagre.min.js.LEGAL.txt`。`asset-manifest.json` 记录固定版本、发布包 SHA-512 完整性和本地文件 SHA-256；导出时仅从本机加载脚本，不访问远程排版服务。

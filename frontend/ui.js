@@ -52,6 +52,24 @@ export function evidenceKindInfo(kind,{document=false}={}){
 export function evidenceReference(requirementId,item,index=0){
  return (String(requirementId??'').trim()||'当前条目')+' · '+(String(item?.source_id??'').trim()||'引用 '+(index+1));
 }
+export const drawingReviewStatuses=Object.freeze({pending:'待核对',confirmed:'已确认',rejected:'已驳回'});
+export function drawingEvidenceOf(source){
+ const row=source?.drawing_evidence??source?.metadata?.drawing_evidence;
+ return typeof row?.id==='string'&&row.id.length?row:null;
+}
+export function drawingBox(box){
+ if(!Array.isArray(box)||box.length!==4||!box.every(n=>Number.isFinite(n)&&n>=0&&n<=1))return null;
+ return box[2]>box[0]&&box[3]>box[1]?box:null;
+}
+export function drawingLocation(row){
+ const labels=[drawingBox(row.annotation_box)&&'标注',drawingBox(row.object_box)&&'对象'].filter(Boolean);
+ let page=Number.isSafeInteger(row.page_number)&&row.page_number>0?'第 '+row.page_number+' 页':'页码未记录';
+ if(row.source_part)page=(row.slide_number?'第 '+row.slide_number+' 张幻灯片 · ':'')+'内嵌图片 '+row.page_number;
+ return page+' · '+(labels.length?labels.join('、')+'已定位':'未记录框选位置');
+}
+export function drawingCitation(row){
+ return ['图纸标注',drawingLocation(row),drawingReviewStatuses[row.status],row.drawing_number&&'图号 '+row.drawing_number,row.revision&&'版次 '+row.revision].filter(Boolean).join(' · ');
+}
 export function evidenceDisplayEntries(evidence){
  if(!Array.isArray(evidence))return [];
  const entries=[],known=new Map();
@@ -63,7 +81,8 @@ export function evidenceDisplayEntries(evidence){
   const alias=String(item.source_id??'').trim();
   // Different positions, classifications or explanations remain separate even
   // when their quotes look alike. An unidentified empty source is not merged.
-  const key=quote.trim()&&identity?JSON.stringify([String(source.dataset_id||source.kb_id||''),identity,String(source.id||''),source.ordinal??null,source.page??null,source.page_num_int??null,source.positions??source.position_int??null,source.excerpt_start??null,source.excerpt_end??null,quote,String(item.kind??''),String(item.analysis??'')]):null;
+  const drawing=drawingEvidenceOf(source);
+  const key=quote.trim()&&identity?JSON.stringify([String(source.dataset_id||source.kb_id||''),identity,String(source.id||''),source.ordinal??null,source.page??null,source.page_num_int??null,source.positions??source.position_int??null,source.excerpt_start??null,source.excerpt_end??null,drawing?.id,drawing?.version,quote,String(item.kind??''),String(item.analysis??'')]):null;
   const existing=key===null?undefined:known.get(key);
   if(existing){existing.duplicateCount++;if(alias&&!existing.aliases.includes(alias))existing.aliases.push(alias);continue;}
   const entry={item,index,aliases:alias?[alias]:[],duplicateCount:0};entries.push(entry);if(key!==null)known.set(key,entry);
@@ -84,10 +103,12 @@ export function sourcesHtml(chunks,question='',options={}){
  const ranked=sentences.map((text,index)=>({text,index,score:terms.reduce((n,t)=>n+(text.toLowerCase().includes(t)?1:0),0)})).sort((a,b)=>b.score-a.score);
  const selected=ranked.filter(x=>x.score>0).slice(0,compact?1:2).sort((a,b)=>a.index-b.index);
  const excerpt=selected.length?selected.map(x=>`<mark><strong>${esc(x.text)}</strong></mark>`).join(' … '):compact?esc(sentences.find(sentence=>sentence.trim())||content):esc(content.slice(0,220))+(content.length>220?'…':'');
- const fileSource={id:c.id,document_id:c.document_id||c.doc_id,dataset_id:c.dataset_id||c.kb_id,document_name:name,positions:c.positions||c.position_int,page_num_int:c.page_num_int,content};
+ const drawing=drawingEvidenceOf(c);
+ const fileSource={id:c.id,document_id:c.document_id||c.doc_id,dataset_id:c.dataset_id||c.kb_id,document_name:name,positions:c.positions||c.position_int,page_num_int:c.page_num_int,page:c.page,page_number:c.page_number,content,...(drawing?{drawing_evidence:drawing}:{})};
  const number=compact&&chunks.length===1?'':'['+(i+1)+'] ';
  const nameOnly=compact&&content.trim()===String(name).trim();
- return `<div class="source-item source-${type}"><header>${fileIcon(name)}${fileSource.document_id?`<button type="button" class="source-file-link" data-file-source="${esc(JSON.stringify(fileSource))}" title="打开原文件并查看当前引用">${number}${esc(name)} ↗</button>`:`<strong>${number}${esc(name)}</strong>`}</header>${nameOnly?'<p class="hint">本条引用来自知识库文件名清单。</p>':`<div class="source-excerpt">${compact?'<span class="source-excerpt-label">原文摘要 · 词语定位</span>':''}${excerpt}</div><details class="source-full"><summary>${compact?'查看完整引用片段':'展开完整切片'}${selected.length?'':'（未找到明确匹配句）'}</summary><p>${compact?esc(content):sentences.map((t,n)=>selected.some(x=>x.index===n)?`<mark><strong>${esc(t)}</strong></mark>`:esc(t)).join('\n')}</p></details>`}</div>`;
+ const action=drawing?'定位图纸证据':'打开原文件并查看当前引用';
+ return `<div class="source-item source-${type}"><header>${fileIcon(name)}${fileSource.document_id?`<button type="button" class="source-file-link" data-file-source="${esc(JSON.stringify(fileSource))}" title="${action}">${number}${esc(name)} ↗</button>`:`<strong>${number}${esc(name)}</strong>`}</header>${drawing?`<p class="hint">${esc(drawingCitation(drawing))}${fileSource.document_id?' · 定位图纸证据':''}</p>`:''}${nameOnly?'<p class="hint">本条引用来自知识库文件名清单。</p>':`<div class="source-excerpt">${compact?'<span class="source-excerpt-label">原文摘要 · 词语定位</span>':''}${excerpt}</div><details class="source-full"><summary>${compact?'查看完整引用片段':'展开完整切片'}${selected.length?'':'（未找到明确匹配句）'}</summary><p>${compact?esc(content):sentences.map((t,n)=>selected.some(x=>x.index===n)?`<mark><strong>${esc(t)}</strong></mark>`:esc(t)).join('\n')}</p></details>`}</div>`;
  }).join('');
  return compact?`<div class="sources sources-compact">${items}</div>`:`<details class="sources"><summary>↗ 查看 ${chunks.length} 条来源证据</summary><p class="hint">重点句按当前问题的词语匹配突出，供核对原文。</p>${items}</details>`;
 }
