@@ -115,8 +115,14 @@ class RetrievalService:
     def rerank(self, question, documents, model_id=""):
         model = self.models.find(model_id, "rerank", private=True)
         base = model["base_url"].rstrip("/")
+        if base.endswith(("/rerank", "/reranks")):
+            endpoint = base
+        elif base.endswith("/compatible-api/v1"):
+            endpoint = base + "/reranks"
+        else:
+            endpoint = base + "/rerank"
         with httpx.Client(timeout=60) as client:
-            response = client.post(base if base.endswith("/rerank") else base + "/rerank",
+            response = client.post(endpoint,
                 headers={"Authorization": "Bearer " + (model.get("api_key") or "not-required")},
                 json={"model": model["name"], "query": question, "documents": documents, "top_n": len(documents)})
             response.raise_for_status()

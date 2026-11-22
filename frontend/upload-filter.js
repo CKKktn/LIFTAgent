@@ -8,3 +8,16 @@ export function uploadSkipReason(file){
   if(!file.size)return '空文件';
   return '';
 }
+
+export async function collectDocumentIds(loadPage,isCurrent=()=>true){
+  const ids=new Set();
+  for(let page=1;isCurrent();page++){
+    const result=await loadPage(page);
+    if(!isCurrent())return null;
+    const before=ids.size;
+    for(const doc of result.docs||[])if(doc.id)ids.add(doc.id);
+    if(ids.size>=Number(result.total||0))return ids;
+    if(ids.size===before)throw Error('文件列表已变化，请刷新后重新全选');
+  }
+  return null;
+}

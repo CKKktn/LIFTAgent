@@ -63,7 +63,8 @@ export function drawingBox(box){
 }
 export function drawingLocation(row){
  const labels=[drawingBox(row.annotation_box)&&'标注',drawingBox(row.object_box)&&'对象'].filter(Boolean);
- const page=Number.isSafeInteger(row.page_number)&&row.page_number>0?'第 '+row.page_number+' 页':'页码未记录';
+ let page=Number.isSafeInteger(row.page_number)&&row.page_number>0?'第 '+row.page_number+' 页':'页码未记录';
+ if(row.source_part)page=(row.slide_number?'第 '+row.slide_number+' 张幻灯片 · ':'')+'内嵌图片 '+row.page_number;
  return page+' · '+(labels.length?labels.join('、')+'已定位':'未记录框选位置');
 }
 export function drawingCitation(row){

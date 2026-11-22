@@ -212,13 +212,16 @@ async function loadDrawingReview(view,token,signal){
 }
 async function showOriginal(locate=false){
  if(!current)return;const {token,signal,source}=begin('original');
- const isPdf=/\.pdf$/i.test(source.name),isOffice=office.test(source.name);
- if(!isPdf&&!isOffice&&!images.test(source.name)&&!plain.test(source.name)&&!/\.(mp3|wav|ogg|m4a|flac|mp4|webm|mov)$/i.test(source.name))return showParsed();
+ const embedded=!!source.drawing?.source_part;
+ const isPdf=/\.pdf$/i.test(source.name),isOffice=office.test(source.name)&&!embedded;
+ if(!embedded&&!isPdf&&!isOffice&&!images.test(source.name)&&!plain.test(source.name)&&!/\.(mp3|wav|ogg|m4a|flac|mp4|webm|mov)$/i.test(source.name))return showParsed();
  const drawingView=source.drawing?{source,pdf:isPdf,overlay:null,page:null,draft:null,form:null,marking:null,saving:false}:null;
  if(drawingView)void loadDrawingReview(drawingView,token,signal);
  try{
  $('viewerStatus').textContent=isOffice?'正在生成本机预览，首次打开可能需要片刻…':'正在读取原文件…';
- const url=isOffice?`/preview-office?document_id=${encodeURIComponent(source.docId)}&name=${encodeURIComponent(source.name)}`:proxyUrl(`/api/v1/documents/${encodeURIComponent(source.docId)}/preview`);
+ let url=proxyUrl(`/api/v1/documents/${encodeURIComponent(source.docId)}/preview`);
+ if(embedded)url=proxyUrl(drawingEvidencePath(source.kbId,source.docId,source.drawing.id)+'/image');
+ else if(isOffice)url=`/preview-office?document_id=${encodeURIComponent(source.docId)}&name=${encodeURIComponent(source.name)}`;
  const blob=await getBlob(url,signal);if(!valid(token))return;
  $('viewerBody').replaceChildren();
  if(plain.test(source.name)){
@@ -227,12 +230,12 @@ async function showOriginal(locate=false){
  blobUrl=URL.createObjectURL(new Blob([blob],{type:isPdf||isOffice?'application/pdf':blob.type}));
  if(isPdf||isOffice){
  await renderPdf(blob,source,isOffice,token,locate,drawingView);if(!valid(token))return;
- }else if(images.test(source.name)){
+ }else if(embedded||images.test(source.name)){
   const frame=document.createElement('div');frame.className='drawing-image-frame';
   const img=document.createElement('img');img.alt=source.name;img.className='viewer-image';frame.append(img);
   if(drawingView){
    const overlay=document.createElement('div');overlay.className='drawing-overlays';
-   img.addEventListener('load',()=>{if(valid(token)){frame.append(overlay);attachDrawingOverlay(drawingView,overlay,1,token);}},{once:true});
+   img.addEventListener('load',()=>{if(valid(token)){frame.append(overlay);attachDrawingOverlay(drawingView,overlay,source.drawing.page_number,token);}},{once:true});
   }
   img.addEventListener('error',()=>failure(Error('浏览器无法解码图片'),token),{once:true});
   img.src=blobUrl;$('viewerBody').append(frame);$('viewerStatus').textContent='图片原文件';

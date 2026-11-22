@@ -1,6 +1,6 @@
 import {drawingBox,drawingLocation,drawingReviewStatuses,esc} from './ui.js';
 
-export const drawingFile=name=>/\.(pdf|png|jpe?g)$/i.test(name);
+export const drawingFile=name=>/\.(pdf|png|jpe?g|docx|pptx|xlsx)$/i.test(name);
 export const drawingPageSize=20;
 const drawingFields=[
  ['drawing_number','图号'],['revision','版次'],['view','视图'],
@@ -23,7 +23,7 @@ export function drawingEvidenceSettings(models,selected='',method){
  const recognition=method==='ocr_vision'?'OCR 辅助视觉':'直接视觉';
  return `<label for="drawingVisionModel">图纸识别模型 · ${recognition}</label><select id="drawingVisionModel" name="drawing_vision_model" aria-describedby="drawingVisionHelp">
  <option value="">关闭图纸识别</option>${options.map(model=>`<option value="${esc(model.id)}"${model.id===selected?' selected':''}>${esc(model.label)}</option>`).join('')}</select>
- <p id="drawingVisionHelp" class="hint">在<a href="#models">模型设置</a>中以「视觉 / 图纸识别」用途添加 API 接入，再在这里选择。启用后，解析 PNG、JPG、JPEG 和符合识别条件的 PDF 页时，会将图像发送至所选模型 API。${method==='ocr_vision'?' 请求还会附上识别到的文字。':''}</p>`;
+ <p id="drawingVisionHelp" class="hint">在<a href="#models">模型设置</a>中以「视觉 / 图纸识别」用途添加 API 接入，再在这里选择。启用后，解析 PNG、JPG、JPEG、Word/PPT/Excel 内嵌图及符合识别条件的 PDF 页时，会将图像发送至所选模型 API。${method==='ocr_vision'?' 请求还会附上识别到的文字。':''}</p>`;
 }
 
 export function drawingOverlayHtml(row,page){

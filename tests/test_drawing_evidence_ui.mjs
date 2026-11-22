@@ -23,6 +23,16 @@ test('drawing image formats pass both file and folder upload filters', () => {
   assert.match(uploadSkipReason({name:'图纸.gif',size:4}),/本系统暂不支持/);
 });
 
+test('Office drawing citations identify embedded images without inventing Word pages', async () => {
+  const {drawingFile} = await import('../frontend/drawing-evidence.js');
+  const {drawingLocation} = await import('../frontend/ui.js');
+  for (const name of ['report.docx','diagram.pptx','spec.xlsx']) assert.equal(drawingFile(name),true);
+  const location=drawingLocation({...evidence,source_part:'word/media/image3.png'});
+  assert.match(location,/内嵌图片 3/);
+  assert.doesNotMatch(location,/第 3 页/);
+  assert.match(drawingLocation({...evidence,source_part:'ppt/media/image3.png',slide_number:2}),/第 2 张幻灯片/);
+});
+
 test('citation carries both coordinates and exact evidence ID into the shared original viewer', async () => {
   const {sourcesHtml} = await import('../frontend/ui.js');
   for (const compact of [false,true]) {

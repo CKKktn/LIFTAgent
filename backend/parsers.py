@@ -40,6 +40,34 @@ def convert_office(path, directory, target, configured_binary=""):
     return result
 
 
+def _word_parts(element):
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+    for child in element.iterchildren():
+        if child.tag.endswith("}p"):
+            yield Paragraph(child, None).text
+            for textbox in child.xpath(".//w:txbxContent"):
+                yield from _word_parts(textbox)
+        elif child.tag.endswith("}tbl"):
+            for row in Table(child, None).rows:
+                yield " | ".join("\n".join(_word_parts(cell._tc)) for cell in row.cells)
+        else:
+            # Content controls, including generated tables of contents, wrap
+            # ordinary paragraphs and tables without changing their order.
+            yield from _word_parts(child)
+
+
+def _presentation_parts(shapes):
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+    for shape in shapes:
+        if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
+            yield from _presentation_parts(shape.shapes)
+        if shape.has_text_frame:
+            yield shape.text
+        if shape.has_table:
+            yield from (" | ".join(cell.text for cell in row.cells) for row in shape.table.rows)
+
+
 def extract(path: Path, max_characters=2_000_000, libreoffice="", *, allow_empty=False):
     extension = path.suffix.lower()
     output = []
@@ -63,18 +91,21 @@ def extract(path: Path, max_characters=2_000_000, libreoffice="", *, allow_empty
                 output.append(Document(page_content=text, metadata={"page_number": index + 1, "source_kind": "pdf"}))
     elif extension == ".docx":
         from docx import Document as WordDocument
-        from docx.table import Table
-        from docx.text.paragraph import Paragraph
+        from docx.document import Document as WordDocumentBody
+        from docx.oxml import parse_xml
         guard_office(path)
-        document = WordDocument(path)
-        parts = []
-        for child in document.element.body.iterchildren():
-            if child.tag.endswith("}p"):
-                parts.append(Paragraph(child, document).text)
-            elif child.tag.endswith("}tbl"):
-                table = Table(child, document)
-                parts.extend(" | ".join(cell.text for cell in row.cells) for row in table.rows)
-        output.append(Document(page_content="\n".join(parts), metadata={"source_kind": "word"}))
+        metadata = {"source_kind": "word"}
+        try:
+            document = WordDocument(path)
+        except KeyError:
+            # A dangling image relationship can coexist with an intact body.
+            # Read only the body and leave image decoding to the visual stage.
+            with zipfile.ZipFile(path) as archive:
+                body = parse_xml(archive.read("word/document.xml"))
+            document = WordDocumentBody(body, None)
+            metadata["parser_warnings"] = ["Word 存在失效的附件关系，已恢复正文；内嵌图片需另行核对。"]
+        parts = list(_word_parts(document.element.body))
+        output.append(Document(page_content="\n".join(parts), metadata=metadata))
     elif extension == ".xlsx":
         from openpyxl import load_workbook
         guard_office(path)
@@ -94,12 +125,7 @@ def extract(path: Path, max_characters=2_000_000, libreoffice="", *, allow_empty
         from pptx import Presentation
         guard_office(path)
         for index, slide in enumerate(Presentation(path).slides):
-            parts = []
-            for shape in slide.shapes:
-                if shape.has_text_frame:
-                    parts.append(shape.text)
-                if shape.has_table:
-                    parts.extend(" | ".join(cell.text for cell in row.cells) for row in shape.table.rows)
+            parts = list(_presentation_parts(slide.shapes))
             output.append(Document(page_content="\n".join(parts), metadata={"slide_number": index + 1, "source_kind": "presentation"}))
     elif extension in LEGACY_OFFICE:
         with tempfile.TemporaryDirectory(prefix="contract-convert-") as temporary:

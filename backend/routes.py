@@ -6,7 +6,7 @@ import mimetypes
 from pathlib import PurePosixPath
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
 from .db import dumps, now, uid
@@ -153,6 +153,10 @@ def make_api(db, models, knowledge, retrieval, chat):
     @router.get("/datasets/{dataset_id}/documents/{document_id}/drawing-evidence/{evidence_id}")
     def get_drawing_evidence(dataset_id: str, document_id: str, evidence_id: str):
         return ok(knowledge.drawing_record(dataset_id, document_id, evidence_id))
+
+    @router.get("/datasets/{dataset_id}/documents/{document_id}/drawing-evidence/{evidence_id}/image")
+    def drawing_evidence_image(dataset_id: str, document_id: str, evidence_id: str):
+        return Response(knowledge.drawing_image(dataset_id, document_id, evidence_id), media_type="image/png")
 
     @router.patch("/datasets/{dataset_id}/documents/{document_id}/drawing-evidence/{evidence_id}")
     def review_drawing_evidence(dataset_id: str, document_id: str, evidence_id: str, body: DrawingReviewInput):

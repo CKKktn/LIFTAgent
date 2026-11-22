@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
+from io import BytesIO
 import hashlib
 import json
 import math
@@ -305,8 +306,9 @@ class KnowledgeService:
 
     def _drawing_parts(self, row, generation, vision_model, documents, *, force_pdf):
         source = self.file_path(row)
-        native_pages = {item.metadata["page_number"]: item for item in documents}
-        candidates, warnings = [], []
+        native_pages = {item.metadata["page_number"]: item for item in documents if "page_number" in item.metadata}
+        candidates = []
+        warnings = [message for item in documents for message in item.metadata.get("parser_warnings", [])]
         model = None
         with source.open("rb") as stream:
             source_sha256 = hashlib.file_digest(stream, "sha256").hexdigest()
@@ -315,7 +317,7 @@ class KnowledgeService:
                               (row["id"],))
         reviewed = [json.loads(item["metadata"])["drawing_evidence"] for item in edited]
         reviewed = [item for item in reviewed if item.get("source_sha256") == source_sha256]
-        with closing(drawing_pages(source, text_pages=set(native_pages), force_pdf=force_pdf)) as pages:
+        with closing(drawing_pages(source, text_pages=set(native_pages), force_pdf=force_pdf, warnings=warnings)) as pages:
             for page in pages:
                 with page.image:
                     if not self._current(row["id"], generation):
@@ -324,24 +326,28 @@ class KnowledgeService:
                         model = self.models.vision(vision_model, temperature=0, max_tokens=8192)
                         model = model.model_copy(update={"streaming": False})
                     kind, text, records, page_warnings = read_drawing_page(model, page)
+                    location = ({"source_part": page.source_part, "location_kind": "embedded_image",
+                                 "slide_number": page.slide_number} if page.source_part else {})
                 warnings.extend(f"第 {page.number} 页 {warning}" for warning in page_warnings)
-                if kind == "drawing" and page.number in native_pages:
+                if kind == "drawing" and not page.source_part and page.number in native_pages:
                     native_pages[page.number].metadata["drawing_page_text"] = True
                 if records:
                     for record in records:
                         recognition = [record[key] for key in ("drawing_number", "revision", "view", "object",
                                                                "annotation", "annotation_box")]
-                        record.update(id=uid(), source_sha256=source_sha256,
+                        record.update(id=uid(), source_sha256=source_sha256, **location,
                                       recognition_key=hashlib.sha256(dumps(recognition).encode()).hexdigest())
                         if not any(same_drawing_mark(item, record) for item in reviewed):
                             candidates.append(record)
-                elif kind == "text" and text and page.number not in native_pages:
-                    documents.append(Document(page_content=text, metadata={
-                        "page_number": page.number, "source_kind": TRANSCRIPTION_KIND,
-                    }))
                 elif kind == "drawing":
                     warnings.append(f"第 {page.number} 页未识别到可保存的图纸标注")
-        documents.sort(key=lambda document: document.metadata["page_number"])
+                native = native_pages.get(page.number) if not page.source_part else None
+                if text and not records and (native is None or text.strip() not in native.page_content):
+                    documents.append(Document(page_content=text, metadata={
+                        "page_number": page.number, "source_kind": TRANSCRIPTION_KIND, **location,
+                        **({"drawing_page_text": True} if kind == "drawing" else {}),
+                    }))
+        documents.sort(key=lambda document: document.metadata.get("page_number", 0))
         marks = sorted([*reviewed, *candidates], key=lambda item: item["page_number"])
         drawings = [Document(page_content=drawing_text(mark), metadata={
             "page_number": mark["page_number"], "source_kind": DRAWING_KIND, "drawing_evidence": mark,
@@ -434,6 +440,22 @@ class KnowledgeService:
         if not evidence:
             raise HTTPException(404, "图纸标注不存在，可能已重新解析")
         return evidence
+
+    def drawing_image(self, dataset_id, document_id, chunk_id):
+        row = self.document(document_id, dataset_id)
+        evidence = self.drawing_record(dataset_id, document_id, chunk_id)
+        source = self.file_path(row)
+        with source.open("rb") as stream:
+            if hashlib.file_digest(stream, "sha256").hexdigest() != evidence.get("source_sha256"):
+                raise HTTPException(409, "原图已经改变，请重新解析文件")
+        if not evidence.get("source_part"):
+            raise HTTPException(400, "该证据请通过原文件预览")
+        with closing(drawing_pages(source, text_pages=set(), source_part=evidence["source_part"])) as pages:
+            for page in pages:
+                with page.image, BytesIO() as output:
+                    page.image.save(output, "PNG")
+                    return output.getvalue()
+        raise HTTPException(404, "内嵌原图不存在或无法解码")
 
     def review_drawing(self, dataset_id, document_id, chunk_id, update: DrawingReviewInput):
         changes = update.model_dump(exclude_unset=True)

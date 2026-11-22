@@ -194,25 +194,37 @@ _UNIT_ALIASES = {
 }
 _UNITS = sorted({*_UNIT_ALIASES, "Mbps", "Gbps", "Kbps", "MB/s", "GB/s", "KB/s", "MPa", "kPa", "Pa", "MHz", "GHz", "kHz", "Hz", "mAh", "Ah", "kWh", "Wh", "kW", "W", "mV", "kV", "V", "mA", "A", "mm", "cm", "km", "ms", "us", "min", "s", "h", "kg", "g", "MB", "GB", "KB", "°C", "%", "天", "年"}, key=len, reverse=True)
 _QUANTITY_RE = re.compile(r"(?<![A-Za-z0-9_])([+-]?\d+(?:\.\d+)?)\s*(" + "|".join(re.escape(unit) for unit in _UNITS) + r")(?![A-Za-z])")
+_INHERITED_UNIT_RE = re.compile(
+    r"(?<![A-Za-z0-9_])([+-]?\d+(?:\.\d+)?)\s*(?:±|\+/-|至|到|[~～])\s*[+-]?\d+(?:\.\d+)?\s*("
+    + "|".join(re.escape(unit) for unit in _UNITS) + r")(?![A-Za-z])"
+)
+_TOLERANCE_RE = re.compile(
+    r"(?<![A-Za-z0-9_])([+-]?\d+(?:\.\d+)?)\s*(?:±|\+/-)\s*(\d+(?:\.\d+)?)\s*("
+    + "|".join(re.escape(unit) for unit in _UNITS) + r")(?![A-Za-z])"
+)
 
 
 def _quantities(text):
     output = set()
-    for number, unit in _QUANTITY_RE.findall(text):
+    for number, unit in _QUANTITY_RE.findall(text) + _INHERITED_UNIT_RE.findall(text):
         try:
             output.add((str(Decimal(number).normalize()), _UNIT_ALIASES.get(unit, unit)))
         except InvalidOperation:
             continue
     for number in re.findall(r"百分之\s*([+-]?\d+(?:\.\d+)?)", text):
         output.add((str(Decimal(number).normalize()), "%"))
+    for nominal, tolerance, unit in _TOLERANCE_RE.findall(text):
+        center, delta = Decimal(nominal), Decimal(tolerance)
+        canonical_unit = _UNIT_ALIASES.get(unit, unit)
+        output.update((str(value.normalize()), canonical_unit) for value in (center-delta, center+delta))
     return output
 
 
-def _source_input(references):
+def _source_input(references, allowed_ids=None):
     limit = min(6000, MAX_CONTEXT_CHARACTERS // max(1, len(references)))
     return [{"source_id": index + 1, "document_name": item.get("document_name", "未命名资料"), "content": str(item.get("content", ""))[:limit],
              "excerpt_truncated": len(str(item.get("content", ""))) > limit, **image_evidence_context(item)}
-            for index, item in enumerate(references)]
+            for index, item in enumerate(references) if allowed_ids is None or index+1 in allowed_ids]
 
 
 def _reference_ids(text):
@@ -228,6 +240,8 @@ def _has_measurement(text):
             if re.search(r"(?:不是|不代表|不等于|不属于|不含|尚未|未经|未提供|未完成|未进行|未取得|未获得|没有|无|需|待|计划|拟|将|应).{0,6}$", prefix):
                 continue
             if re.match(r"^[（(]?(?:尚未|未开展|未完成|待补|暂无)", suffix):
+                continue
+            if re.match(r"^(?:范围|结果|值)?(?:应|须|需|要求|规定)", suffix):
                 continue
             return True
     return False
@@ -358,7 +372,7 @@ class CollabEngine:
         references = state.get("references", [])
         if not references:
             return {"evidence_assessment": {"sufficient": False, "relevant_ids": [], "missing": ["未找到与问题相关且可用的知识库材料" if state.get("dataset_ids") else "当前助手未关联知识库"], "conflicts": [], "summary": "尚无可用于核对本项目事实的来源，不能据此判断不符合或已完成。"}}
-        value = self._ask(state, "COLLAB_EVIDENCE_V1", "判断来源是否相关、是否足以回答本轮问题。分别核对对象、型号、阶段、条件和日期；方案不等于实测，合同要求不等于实现证据，测试计划/模板不等于测试报告。冲突必须说明同一对象、阶段和可比条件下的具体矛盾。只列真实数字 source_id；不足时指出可用于下一轮检索的材料缺口。输出 {\"sufficient\":true或false,\"relevant_ids\":[1],\"missing\":[\"缺口\"],\"conflicts\":[\"冲突\"],\"summary\":\"依据与边界\"}。", {"question": state["standalone_question"], "intent": state["intent"], "references": _source_input(references), "round": state.get("retrieval_rounds", 0)}, EvidenceOutput)
+        value = self._ask(state, "COLLAB_EVIDENCE_V1", "判断来源是否相关、是否足以回答本轮问题。分别核对对象、型号、阶段、条件和日期；方案不等于实测，合同要求不等于实现证据，测试计划/模板不等于测试报告。合同门槛与设计值或实测值的差异应在 summary 中说明，可用于回答是否符合；conflicts 仅记录同一对象、同一阶段、可比条件下两份实际材料相互矛盾且无法据版本取舍的情况。只列真实数字 source_id；不足时指出可用于下一轮检索的材料缺口。输出 {\"sufficient\":true或false,\"relevant_ids\":[1],\"missing\":[\"缺口\"],\"conflicts\":[\"冲突\"],\"summary\":\"依据与边界\"}。", {"question": state["standalone_question"], "intent": state["intent"], "references": _source_input(references), "round": state.get("retrieval_rounds", 0)}, EvidenceOutput)
         if any(not 1 <= identifier <= len(references) for identifier in value["relevant_ids"]):
             raise CollabOutputError("证据检查返回了不存在的来源编号，未采用该检查结果")
         value["relevant_ids"] = list(dict.fromkeys(value["relevant_ids"]))
@@ -399,8 +413,10 @@ class CollabEngine:
             MessagesPlaceholder("history"),
             ("human", "COLLAB_ANSWER_V1\n根据以下数据回答本轮问题。若存在 previous_validation，修正其中问题并重新核对全部引用。\nINPUT_JSON:\n{payload}"),
         ])
+        relevant_ids = set(state.get("evidence_assessment", {}).get("relevant_ids", []))
+        source_rows = _source_input(references, relevant_ids or None)
         data = {"question": state["question"], "standalone_question": state["standalone_question"], "intent": state["intent"],
-            "references": _source_input(references), "evidence_assessment": state.get("evidence_assessment", {}), "previous_validation": state.get("validation", {})}
+            "references": source_rows, "evidence_assessment": state.get("evidence_assessment", {}), "previous_validation": state.get("validation", {})}
         message = prompt.invoke({"history": history, "payload": json.dumps(data, ensure_ascii=False)})
         if image:
             stored = read_image(self.retrieval.db, image["id"])
@@ -489,7 +505,19 @@ class CollabEngine:
                          or all(awaiting_image_review(source) for source in verdict_sources))):
                 issues.append("明确判定引用了待核对的图片证据，请打开原图复核")
                 image_evidence_needs_review = True
-            phase_claim = re.search(r"(?:实测|测试|验收).{0,12}(?:达标|合格|通过)|实测.{0,10}(?:为|测得|记录|结果|\d)", sentence)
+            phase_sentence = re.sub(r"[*\x60]", "", sentence)
+            phase_matches = re.finditer(
+                r"(?:实测|测试)(?:结果)?(?:已|已经)?(?:达标|合格|通过)|验收(?:已|已经)?通过"
+                r"|实测(?!范围|记录)[^，,；;]{0,10}(?:为|测得)\s*[+-]?\d"
+                r"|实测(?:值|结果)?\s*[+-]?\d", phase_sentence,
+            )
+            phase_claim = any(
+                not re.search(r"应|须|需|是否|计划|预计", match.group())
+                and not re.search(
+                    r"(?:不是|不等于|不等同于|不属于|不构成|缺少|缺乏|尚缺|待补|未见|没有|无|未提供|不足|需|待|应|须|要求|规定|用以|用于)[^，,；;]{0,12}$",
+                    phase_sentence[max(0, match.start()-20):match.start()],
+                ) for match in phase_matches
+            )
             phase_sources = cited_sources if cited else (used_sources or references)
             phase_source = "\n".join(source.get("content", "") for source in phase_sources
                                      if not source.get("drawing_evidence") and not awaiting_image_review(source))
@@ -500,7 +528,7 @@ class CollabEngine:
                 )
                 break
         if references and text_answer.strip():
-            value = self._ask(state, "COLLAB_VALIDATE_V1", "核查回答的项目事实能否由所引原文支持，逐一核对数值、单位、比较方向、对象、日期、阶段和适用条件。有真实编号不代表引用支持结论；要求/方案/承诺不能直接证明实测、交付或验收。不要补造来源或修改草稿，不评价语言风格。输出 {\"grounded\":true或false,\"issues\":[\"具体问题\"],\"supported_ids\":[1],\"summary\":\"核对依据与边界\"}。", {"question": state["standalone_question"], "intent": state["intent"], "answer": text_answer if image else answer, "references": _source_input(references), "evidence_assessment": assessment}, ValidationOutput)
+            value = self._ask(state, "COLLAB_VALIDATE_V1", "核查回答的项目事实能否由所引原文支持，逐一核对数值、单位、比较方向、对象、日期、阶段和适用条件。有真实编号不代表引用支持结论；要求/方案/承诺不能直接证明实测、交付或验收。不要补造来源或修改草稿，不评价语言风格。输出 {\"grounded\":true或false,\"issues\":[\"具体问题\"],\"supported_ids\":[1],\"summary\":\"核对依据与边界\"}。", {"question": state["standalone_question"], "intent": state["intent"], "answer": text_answer if image else answer, "references": _source_input(references, relevant or None), "evidence_assessment": assessment}, ValidationOutput)
             supported = set(value["supported_ids"])
             if any(not 1 <= identifier <= len(references) for identifier in supported):
                 issues.append("回答校验返回了不存在的来源编号")

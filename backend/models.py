@@ -217,8 +217,9 @@ class ModelRegistry:
         if model["id"] == "local-features":
             return "local-features-v1", LocalFeatureEmbeddings()
         fingerprint = hashlib.sha256((model["id"] + "|" + model["name"] + "|" + model["base_url"]).encode()).hexdigest()[:20]
-        # Qwen 3.7 Embedding Flash accepts at most 20 input texts per request.
-        batch_size = 20 if model["name"].casefold() == "qwen3.7-text-embedding-flash" else 32
+        # Both Qwen 3.7 text embedding variants accept at most 20 texts per request.
+        limited_models = {"qwen3.7-text-embedding", "qwen3.7-text-embedding-flash"}
+        batch_size = 20 if model["name"].casefold() in limited_models else 32
         return fingerprint, OpenAIEmbeddings(model=model["name"], base_url=model["base_url"],
             api_key=model.get("api_key") or "not-required", check_embedding_ctx_length=False,
             chunk_size=batch_size, request_timeout=60, max_retries=1)
