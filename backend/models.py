@@ -70,11 +70,11 @@ class ModelRegistry:
 
     def all(self):
         values = [{
-            "id": "local-features", "model_id": "local-features", "name": "本地文本特征（无需密钥）",
+            "id": "local-features", "model_id": "local-features", "name": "LocalEmbedding",
             "model_type": "embedding", "instance_name": "内置", "provider_name": "Local",
             "base_url": "", "api_key_set": False, "read_only": True,
         }, {
-            "id": "local-rerank", "model_id": "local-rerank", "name": "关键词与向量混合排序",
+            "id": "local-rerank", "model_id": "local-rerank", "name": "LocalRerank",
             "model_type": "rerank", "instance_name": "内置", "provider_name": "Local",
             "base_url": "", "api_key_set": False, "read_only": True,
         }]

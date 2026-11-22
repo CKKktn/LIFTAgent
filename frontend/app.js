@@ -701,7 +701,7 @@ function renderModels(){
     const hasDefault=options.some(model=>model.model_id===defaultId);
     return `<div>
       <h3>${label}</h3>
-      <label for="default-model-${type}">本地服务 默认模型</label>
+      <label for="default-model-${type}">默认模型</label>
       <div class="default-model-select">
         <select id="default-model-${type}" data-type="${type}" ${options.length?'':'disabled'}>
           ${options.map(model=>`<option value="${esc(model.model_id)}" ${model.model_id===defaultId?'selected':''}>${esc(model.name)} · ${esc(model.instance_name)}</option>`).join('')}
