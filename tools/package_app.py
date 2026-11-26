@@ -8,7 +8,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
 NAME = "contract-review-langchain-0.5.0"
-FILES = ["README.md", "UPGRADING.md", "THIRD_PARTY_NOTICES.md", ".env.example", ".gitignore", "pytest.ini", "requirements.txt", "requirements.lock.txt", "start.cmd", "start.ps1", "start-trial.cmd",
+FILES = ["README.md", "UPGRADING.md", "THIRD_PARTY_NOTICES.md", ".env.example", ".gitignore", "pytest.ini", "requirements.txt", "requirements.lock.txt", "start.cmd", "start.ps1",
     "tools/bootstrap.py", "tools/package_app.py", "tools/run_ui_fixture.py", "tools/install_background_assets.py", "tools/export_review_graph.py",
     "tools/export_knowledge.py", "tools/import_knowledge.py", "tools/recover_knowledge_ocr.py", "tools/windows_ocr.ps1",
     "tests/test_backend.py", "tests/fake_model_provider.py", "tests/test_frontend_state.mjs", "tests/test_answer_output.mjs", "tests/test_requirement_editor.mjs", "tests/test_report_workspace.mjs", "tests/test_report_export.mjs", "tests/test_review_jobs.mjs", "tests/test_workflow_academic.mjs", "tests/test_review_engine.py", "tests/test_review_jobs.py", "tests/test_review_graph.py",
