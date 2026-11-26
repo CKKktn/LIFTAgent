@@ -128,6 +128,8 @@ html[data-theme=light] .rw-workspace{--rw-paper:#fff;--rw-surface:#f5f8fc;--rw-t
 .rw-detail-box:last-child:nth-child(odd){grid-column:1/-1}
 .rw-detail-box h4{margin:0 0 .35rem}
 .rw-detail-box p{margin:0}
+.report-save-status{padding-top:.65rem;color:var(--rw-shell-muted);font-size:.75rem}
+.report-save-status:empty{display:none}
 .rw-detail-analysis{border-left:3px solid var(--rw-accent)}
 .rw-detail-gaps{border-left:3px solid #b58a35}
 .rw-detail-action{background:var(--rw-accent-bg)}

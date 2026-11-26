@@ -92,6 +92,7 @@ export function evidenceDisplayEntries(evidence){
 export function sourcesHtml(chunks,question='',options={}){
  if(!Array.isArray(chunks)||!chunks.length)return '';
  const compact=options.compact===true;
+ const showExcerpt=options.showExcerpt!==false;
  const terms=[...new Set((question.toLowerCase().match(/[a-z0-9_]{2,}|[\u4e00-\u9fff]{2,}/g)||[]).flatMap(t=>/^[\u4e00-\u9fff]+$/.test(t)?Array.from({length:Math.max(0,t.length-1)},(_,i)=>t.slice(i,i+2)):[t]))];
  const items=chunks.map((c,i)=>{
  const name=c.document_name||c.doc_name||c.name||c.document_id||'文档切片';
@@ -108,7 +109,7 @@ export function sourcesHtml(chunks,question='',options={}){
  const number=compact&&chunks.length===1?'':'['+(i+1)+'] ';
  const nameOnly=compact&&content.trim()===String(name).trim();
  const action=drawing?'定位图纸证据':'打开原文件并查看当前引用';
- return `<div class="source-item source-${type}"><header>${fileIcon(name)}${fileSource.document_id?`<button type="button" class="source-file-link" data-file-source="${esc(JSON.stringify(fileSource))}" title="${action}">${number}${esc(name)} ↗</button>`:`<strong>${number}${esc(name)}</strong>`}</header>${drawing?`<p class="hint">${esc(drawingCitation(drawing))}${fileSource.document_id?' · 定位图纸证据':''}</p>`:''}${nameOnly?'<p class="hint">本条引用来自知识库文件名清单。</p>':`<div class="source-excerpt">${compact?'<span class="source-excerpt-label">原文摘要 · 词语定位</span>':''}${excerpt}</div><details class="source-full"><summary>${compact?'查看完整引用片段':'展开完整切片'}${selected.length?'':'（未找到明确匹配句）'}</summary><p>${compact?esc(content):sentences.map((t,n)=>selected.some(x=>x.index===n)?`<mark><strong>${esc(t)}</strong></mark>`:esc(t)).join('\n')}</p></details>`}</div>`;
+ return `<div class="source-item source-${type}"><header>${fileIcon(name)}${fileSource.document_id?`<button type="button" class="source-file-link" data-file-source="${esc(JSON.stringify(fileSource))}" title="${action}">${number}${esc(name)} ↗</button>`:`<strong>${number}${esc(name)}</strong>`}</header>${drawing?`<p class="hint">${esc(drawingCitation(drawing))}${fileSource.document_id?' · 定位图纸证据':''}</p>`:''}${nameOnly?'<p class="hint">本条引用来自知识库文件名清单。</p>':`${showExcerpt?`<div class="source-excerpt">${compact?'<span class="source-excerpt-label">原文摘要 · 词语定位</span>':''}${excerpt}</div>`:''}<details class="source-full"><summary>${compact?'查看完整引用片段':'展开完整切片'}${selected.length||!showExcerpt?'':'（未找到明确匹配句）'}</summary><p>${compact?esc(content):sentences.map((t,n)=>selected.some(x=>x.index===n)?`<mark><strong>${esc(t)}</strong></mark>`:esc(t)).join('\n')}</p></details>`}</div>`;
  }).join('');
  return compact?`<div class="sources sources-compact">${items}</div>`:`<details class="sources"><summary>↗ 查看 ${chunks.length} 条来源证据</summary><p class="hint">重点句按当前问题的词语匹配突出，供核对原文。</p>${items}</details>`;
 }

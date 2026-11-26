@@ -170,7 +170,7 @@ test('each evidence number is scoped to its requirement and the citation shows s
   assert.equal(reportWorkspaceMetrics(value).counts['不满足'],1);
 });
 
-test('reference files and excerpts are readable without an extra sources disclosure',()=>{
+test('report references show the file link and a complete quotation without an excerpt',()=>{
   const quote='无关的背景句。\n额定压力不得低于0.5 MPa。。\n结尾原文保留。';
   const value=report({requirements:[requirement(1,{title:'设备约束',criterion:'额定压力不得低于0.5 MPa。'})],
     results:[result('R001','部分满足',{evidence:[evidence('pressure',{quote,source:{document_id:'pressure',document_name:'压力参数.txt',dataset_id:'fixture'}})]})]});
@@ -178,8 +178,8 @@ test('reference files and excerpts are readable without an extra sources disclos
   const card=item.slice(item.indexOf('<section class="rw-evidence-block"'));
   assert.ok(card.includes('<div class="sources sources-compact">'));
   assert.ok(card.indexOf('source-file-link')<card.indexOf('<details class="source-full"'));
-  assert.ok(card.indexOf('source-excerpt')<card.indexOf('<details class="source-full"'));
-  assert.match(card,/<div class="source-excerpt">[^]*?<mark><strong>额定压力不得低于0\.5 MPa/);
+  assert.doesNotMatch(card,/source-excerpt|原文摘要|词语定位/);
+  assert.match(card,/<summary>查看完整引用片段<\/summary>/);
   assert.ok(card.includes('<p>'+quote+'</p>'),'full original quotation and line breaks remain unchanged');
   assert.ok(card.includes('data-file-source='));assert.ok(card.includes('data-rw-detail='));
   assert.doesNotMatch(item,/<details class="sources"|查看 1 条来源证据/);
