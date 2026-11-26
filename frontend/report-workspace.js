@@ -111,9 +111,7 @@ function resultSections(requirement,result){
   return reportDetailFields(result,typeOf(requirement,result)==='document').map(field=>{
     let content=`<p>${esc(field.value)}</p>`;
     if(field.key==='analysis'&&field.value.length>180){
-      const boundary=field.value.slice(0,140).lastIndexOf('。');
-      const end=boundary>=45?boundary+1:140;
-      content=`<p>${esc(field.value.slice(0,end))}…</p><details class="rw-analysis-full" data-rw-detail="judgment"><summary>查看完整判断依据</summary><p>${esc(field.value)}</p></details>`;
+      content=`<div class="rw-analysis-disclosure" data-rw-analysis><p data-rw-analysis-text>${esc(field.value)}</p><button type="button" class="rw-analysis-toggle" data-rw-analysis-toggle aria-expanded="false" aria-label="展开判断依据" title="展开判断依据"><span aria-hidden="true"></span></button></div>`;
     }
     return `<section class="rw-detail-box rw-detail-${field.key}"><h4>${esc(field.label)}</h4>${content}</section>`;
   }).join('');
@@ -165,6 +163,21 @@ export function bindReportWorkspace(container,report){
   if(!status.value)state.status=status.value='all';if(!category.value)state.category=category.value='all';
   const cards=[...root.querySelectorAll('details[data-rw-item]')];
   root.querySelectorAll('details').forEach(detail=>{const item=detail.closest('details[data-rw-item]');const semantic=detail.dataset.rwDetail||detail.id||detail.className||detail.querySelector('summary')?.textContent||'detail';detail.dataset.rwDetailKey=detail===item?'item:'+item.dataset.rwKey:detail.dataset.rwExtra?'extra:'+detail.dataset.rwExtra:'nested:'+(item?.dataset.rwKey||'scope')+':'+semantic;if(state.open.has(detail.dataset.rwDetailKey))detail.open=true;});
+  function setAnalysisExpanded(panel,expanded){
+    panel.classList.toggle('is-expanded',expanded);
+    const button=panel.querySelector('[data-rw-analysis-toggle]');
+    button.setAttribute('aria-expanded',String(expanded));
+    button.setAttribute('aria-label',expanded?'收起判断依据':'展开判断依据');
+    button.title=expanded?'收起判断依据':'展开判断依据';
+  }
+  root.querySelectorAll('[data-rw-analysis]').forEach((panel,index)=>{
+    const item=panel.closest('[data-rw-item]');
+    panel.dataset.rwAnalysisKey='analysis:'+item.dataset.rwKey;
+    const paragraph=panel.querySelector('[data-rw-analysis-text]');
+    paragraph.id='rw-analysis-'+contentKey(key)+'-'+index;
+    panel.querySelector('[data-rw-analysis-toggle]').setAttribute('aria-controls',paragraph.id);
+    setAnalysisExpanded(panel,state.open.has(panel.dataset.rwAnalysisKey));
+  });
   function activate(tab){
     state.tab=['overview','items','scope'].includes(tab)?tab:'overview';
     for(const button of tabs){const selected=button.dataset.rwTab===state.tab;button.setAttribute('aria-selected',String(selected));button.tabIndex=selected?0:-1;}
@@ -185,6 +198,12 @@ export function bindReportWorkspace(container,report){
   }
   root.addEventListener('click',event=>{
     const button=event.target.closest('button');if(!button||!root.contains(button))return;
+    if(button.hasAttribute('data-rw-analysis-toggle')){
+      const panel=button.closest('[data-rw-analysis]'),expanded=button.getAttribute('aria-expanded')!=='true';
+      setAnalysisExpanded(panel,expanded);
+      if(expanded)state.open.add(panel.dataset.rwAnalysisKey);else state.open.delete(panel.dataset.rwAnalysisKey);
+      return;
+    }
     if(button.dataset.rwTab){activate(button.dataset.rwTab);return;}
     if(button.hasAttribute('data-rw-show-scope')){activate('scope');return;}
     if(button.hasAttribute('data-rw-show-items')){showItems();return;}

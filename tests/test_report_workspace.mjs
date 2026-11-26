@@ -240,12 +240,14 @@ test('judgment keeps its own section and identical supplemental material is omit
 });
 
 test('four distinct sections are boxed and long historical reasoning remains expandable',()=>{
-  const analysis='同工况实测低于要求。'.repeat(20);
+  const analysis=Array.from({length:20},(_,index)=>'第'+(index+1)+'项同工况实测低于要求。').join('');
   const value=report({requirements:[requirement(1)],results:[result('R001','不满足',{analysis})]});
   const item=renderedItem(renderReportWorkspace(value),'R001');
   for(const key of ['analysis','materials','gaps','action'])assert.ok(item.includes('class="rw-detail-box rw-detail-'+key+'"'));
-  assert.match(item,/查看完整判断依据/);
-  assert.ok(item.includes('<p>'+analysis+'</p>'));
+  assert.equal(item.split(analysis.slice(0,60)).length-1,1,'reasoning is stored once instead of a preview followed by repeated full text');
+  assert.match(item,/data-rw-analysis-toggle/);
+  assert.ok(item.includes(analysis));
+  assert.doesNotMatch(item,/查看完整判断依据/);
 });
 
 test('source disclosure identity stays stable when earlier or duplicate references are added',()=>{
