@@ -142,6 +142,8 @@ class ReviewEngine:
         rows = self.db.rows("SELECT * FROM documents WHERE dataset_id=? ORDER BY id", (report["kb"],))
         baselines = {row["id"] for row in report.get("baselineDocs", [])}
         rows = [row for row in rows if row["id"] in baselines or not json.loads(row["metadata"]).get("review_basis")]
+        copies = set(report.get("baselineCopyIds", []))
+        rows = [row for row in rows if row["id"] not in copies]
         if report.get("scope") != "dataset":
             allowed = {item["id"] for item in report.get("baselineDocs", []) + report.get("targetDocs", [])}
             rows = [row for row in rows if row["id"] in allowed]
@@ -221,6 +223,18 @@ class ReviewEngine:
         if vision_id:
             vision = self.models.vision_config(str(vision_id))
             report.update(extractionVisionModel=vision["id"], extractionVisionLabel=vision["name"])
+            fingerprints = {}
+            for row in baselines:
+                with self.knowledge.file_path(row).open("rb") as stream:
+                    fingerprints.setdefault(row["size"], set()).add(hashlib.file_digest(stream, "sha256").digest())
+            copies = []
+            for row in self._document_rows(report):
+                if row["id"] in baseline_ids or row["size"] not in fingerprints:
+                    continue
+                with self.knowledge.file_path(row).open("rb") as stream:
+                    if hashlib.file_digest(stream, "sha256").digest() in fingerprints[row["size"]]:
+                        copies.append(row["id"])
+            report["baselineCopyIds"] = copies
         material_signature = self._material_signature(report)
         model_signature = self._model_signature(report)
         batches = []
@@ -418,7 +432,7 @@ class ReviewEngine:
     def retrieve(self, report, requirement, round_index, previous_chunks, gaps):
         if round_index not in (0, 1):
             raise ReviewOutputError("补充检索次数超过本条预算")
-        baseline = {row["id"] for row in report["baselineDocs"]}
+        baseline = {row["id"] for row in report["baselineDocs"]} | set(report.get("baselineCopyIds", []))
         allowed = {row["id"] for row in report.get("targetDocs", [])} - baseline
         query = requirement["title"] + " " + requirement["criterion"]
         if requirement.get("type") == "numeric":

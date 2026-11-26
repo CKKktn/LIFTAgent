@@ -121,6 +121,10 @@ def test_visual_upload_confirmation_and_chat_judgment_complete_a_job(workspace, 
     app.state.knowledge._parse_one(row["id"], app.state.knowledge.document(row["id"])["generation"])
     basis = client.post(f"/api/v1/datasets/{kb}/review-bases",
                        files=[("file", ("合同.txt", "设备续航不得低于8小时。".encode(), "text/plain"))]).json()["data"][0]
+    duplicate = client.post(f"/api/v1/datasets/{kb}/documents",
+                           files=[("file", ("旧合同副本.txt", "设备续航不得低于8小时。".encode(), "text/plain"))]).json()["data"][0]
+    app.state.db.execute("UPDATE documents SET run='RUNNING' WHERE id=?", (duplicate["id"],))
+    app.state.knowledge._parse_one(duplicate["id"], app.state.knowledge.document(duplicate["id"])["generation"])
     vision_calls, chat_calls = [], []
 
     def see(messages):
@@ -144,10 +148,13 @@ def test_visual_upload_confirmation_and_chat_judgment_complete_a_job(workspace, 
     assert len(vision_calls) == 1 and not chat_calls
     assert waiting["report"]["extractionVisionModel"] == vision["id"]
     assert waiting["report"]["model"] == chat["id"]
+    assert duplicate["id"] in waiting["report"].get("baselineCopyIds", [])
     service.resume(job["id"], "owner", {"revision": waiting["revision"],
                                         "requirements": waiting["report"]["requirements"]})
     finished = wait_status(service, job["id"], "completed")
     assert finished["report"]["results"][0]["status"] == "已满足"
+    assert all(item["source"]["document_id"] != duplicate["id"]
+               for item in finished["report"]["results"][0]["evidence"])
     assert len(vision_calls) == 1 and chat_calls
-    assert app.state.knowledge.dataset(kb)["document_count"] == 1
+    assert app.state.knowledge.dataset(kb)["document_count"] == 2
     assert app.state.db.one("SELECT count(*) AS n FROM chunks WHERE document_id=?", (basis["id"],))["n"] == 0
