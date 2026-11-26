@@ -41,7 +41,7 @@ class KnowledgeService:
         value = self.db.json_get("datasets", identifier)
         if not value:
             raise HTTPException(404, "知识库不存在")
-        stats = self.db.one("SELECT COUNT(*) AS docs, COALESCE(SUM(chunk_count),0) AS chunks FROM documents WHERE dataset_id=?", (identifier,))
+        stats = self.db.one("SELECT COUNT(*) AS docs, COALESCE(SUM(chunk_count),0) AS chunks FROM documents WHERE dataset_id=? AND COALESCE(json_extract(metadata,'$.review_basis'),0)=0", (identifier,))
         return {**value, "document_count": stats["docs"], "chunk_count": stats["chunks"]}
 
     def save_dataset(self, body, identifier=None):
@@ -203,15 +203,16 @@ class KnowledgeService:
     def add_document(self, dataset_id, name, path, size):
         return self.add_documents(dataset_id, [(name, path, size)])[0]
 
-    def add_documents(self, dataset_id, entries):
+    def add_documents(self, dataset_id, entries, *, review_basis=False):
         rows = []
         with self.db.transaction() as connection:
             if not connection.execute("SELECT id FROM datasets WHERE id=?", (dataset_id,)).fetchone():
                 raise HTTPException(404, "知识库不存在，未保存本批文件")
             for name, path, size in entries:
                 identifier, timestamp = uid(), now()
-                connection.execute("INSERT INTO documents(id,dataset_id,name,path,extension,size,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)",
-                    (identifier, dataset_id, name, path.name, path.suffix.lower(), size, timestamp, timestamp))
+                connection.execute("INSERT INTO documents(id,dataset_id,name,path,extension,size,created_at,updated_at,metadata) VALUES (?,?,?,?,?,?,?,?,?)",
+                    (identifier, dataset_id, name, path.name, path.suffix.lower(), size, timestamp, timestamp,
+                     dumps({"review_basis": True}) if review_basis else "{}"))
                 rows.append(dict(connection.execute("SELECT * FROM documents WHERE id=?", (identifier,)).fetchone()))
         return [self.public_document(row) for row in rows]
 
@@ -291,6 +292,8 @@ class KnowledgeService:
                 row = connection.execute("SELECT * FROM documents WHERE id=?", (identifier,)).fetchone()
                 if not row or (dataset_id and row["dataset_id"] != dataset_id):
                     raise HTTPException(404, "部分文档不存在或不属于此知识库")
+                if json.loads(row["metadata"]).get("review_basis"):
+                    raise HTTPException(400, "审查依据用于视觉指标提取，不参与知识库解析。")
                 if row["run"] == "RUNNING" and not cancel:
                     continue
                 generation = row["generation"] + 1

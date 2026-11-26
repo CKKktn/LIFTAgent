@@ -219,6 +219,11 @@ class ReviewJobService:
         request = {"kb": kb, "baseline_document_ids": identifiers, "scope": scope,
                    "target_document_ids": targets if scope == "files" else [], "model_id": model["id"],
                    "title": title.strip(), "focus": focus}
+        vision_id = payload.get("extraction_vision_model_id")
+        if any(json.loads(row.get("metadata", "{}")).get("review_basis") for row in baseline) and not vision_id:
+            raise HTTPException(400, "请选择指标提取视觉模型。")
+        if vision_id:
+            request["extraction_vision_model_id"] = self.models.vision_config(str(vision_id))["id"]
         return request, baseline, target_docs, model
 
     def create(self, owner, payload):
@@ -237,6 +242,9 @@ class ReviewJobService:
                       "model": model["id"], "modelLabel": model.get("name", model["id"]), "focus": request["focus"],
                       "requirements": [], "results": [], "issues": [], "complete": False,
                       "workflowJobId": identifier, "workflowVersion": self.workflow_version}
+            if request.get("extraction_vision_model_id"):
+                visual = self.models.vision_config(request["extraction_vision_model_id"])
+                report.update(extractionVisionModel=visual["id"], extractionVisionLabel=visual["name"])
             record_id = payload.get("record_id")
             body = {"report": report, "status": "未开始"}
             if record_id:

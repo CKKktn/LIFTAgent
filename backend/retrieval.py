@@ -58,7 +58,8 @@ class SQLiteVectorStore(VectorStore):
         if not self.dataset_ids:
             return []
         conditions = ["c.dataset_id IN (" + ",".join("?" for _ in self.dataset_ids) + ")",
-            "c.embedding_id=?", "c.enabled=1", "d.enabled=1", "d.run='DONE'"]
+            "c.embedding_id=?", "c.enabled=1", "d.enabled=1", "d.run='DONE'",
+            "COALESCE(json_extract(d.metadata,'$.review_basis'),0)=0"]
         parameters = [*self.dataset_ids, self.embedding_id]
         for identifiers, negate in [(self.document_ids, False), (self.exclude_ids, True)]:
             if identifiers is not None and (identifiers or not negate):

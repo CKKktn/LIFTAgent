@@ -16,6 +16,7 @@ from typing import Any
 from fastapi import HTTPException
 from langchain_core.output_parsers import PydanticOutputParser, StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import ValidationError
 
 from .db import dumps, now
@@ -24,6 +25,8 @@ from .knowledge import ReviewSourceChanged, ReviewSourceTooLarge
 from .models import provider_error
 from .retrieval import KnowledgeRetriever
 from .review_schemas import DocumentMatches, ExtractedRequirement, ExtractionOutput, JudgmentOutput, PolishedOutput
+from .review_schemas import VisualExtractionOutput
+from .review_basis import visual_basis_batches, visual_basis_blocks
 
 
 VERDICTS = ("已满足", "部分满足", "不满足", "证据不足", "待人工复核", "证据冲突")
@@ -137,6 +140,8 @@ class ReviewEngine:
 
     def _document_rows(self, report):
         rows = self.db.rows("SELECT * FROM documents WHERE dataset_id=? ORDER BY id", (report["kb"],))
+        baselines = {row["id"] for row in report.get("baselineDocs", [])}
+        rows = [row for row in rows if row["id"] in baselines or not json.loads(row["metadata"]).get("review_basis")]
         if report.get("scope") != "dataset":
             allowed = {item["id"] for item in report.get("baselineDocs", []) + report.get("targetDocs", [])}
             rows = [row for row in rows if row["id"] in allowed]
@@ -164,6 +169,8 @@ class ReviewEngine:
     def _model_signature(self, report):
         dataset = self.knowledge.dataset(report["kb"])
         selections = [("chat", report.get("model", "")), ("embedding", dataset["embedding_model"]), ("rerank", "")]
+        if report.get("extractionVisionModel"):
+            selections.append(("vision", report["extractionVisionModel"]))
         versions = []
         for kind, identifier in selections:
             model = self.models.find(identifier, kind)
@@ -210,11 +217,22 @@ class ReviewEngine:
             "requirements": [], "results": [], "issues": [], "skippedFiles": [], "filteredRequirements": [],
             "textExtraction": [], "extractedParts": [], "splitParts": [], "polished": [], "confirmed": False,
             "awaitingConfirmation": False, "extractionComplete": False, "extractionRevision": 6, "complete": False}
+        vision_id = payload.get("extraction_vision_model_id")
+        if vision_id:
+            vision = self.models.vision_config(str(vision_id))
+            report.update(extractionVisionModel=vision["id"], extractionVisionLabel=vision["name"])
         material_signature = self._material_signature(report)
         model_signature = self._model_signature(report)
         batches = []
         for row in baselines:
             try:
+                if vision_id:
+                    pages = visual_basis_batches(self.knowledge, row)
+                    batches.extend(pages)
+                    report["textExtraction"].append({"id": row["id"], "name": row["name"],
+                        "method": "视觉模型逐页提取" + ("（文字重排及内嵌图片）" if any(page["reflow"] for page in pages) else ""),
+                        "pages": len(pages), "characters": 0})
+                    continue
                 source_version, sizes = self.knowledge.prepare_review_source(row)
                 if not sizes:
                     raise ValueError("no text")
@@ -223,7 +241,8 @@ class ReviewEngine:
             except ReviewSourceChanged as error:
                 raise ReviewMaterialsChanged(str(error)) from error
             except Exception:
-                report["skippedFiles"].append({"id": row["id"], "name": row["name"], "reason": "未取得可用文字，请检查格式、OCR或导入缓存"})
+                reason = "未取得可读取页面，请检查格式或另存为 PDF。" if vision_id else "未取得可用文字，请检查格式、OCR或导入缓存"
+                report["skippedFiles"].append({"id": row["id"], "name": row["name"], "reason": reason})
                 continue
             report["textExtraction"].append({"id": row["id"], "name": row["name"], "characters": sum(sizes), "method": json.loads(row["metadata"]).get("text_method", "本地文档解析")})
             source = {"document_id": row["id"], "source_version": source_version, "depth": 0}
@@ -241,15 +260,22 @@ class ReviewEngine:
 
     def extract_batch(self, report, batch):
         document = self.knowledge.document(batch["document_id"], report["kb"])
+        visual = "visual_page" in batch
         try:
-            paragraphs = self.knowledge.review_source_batch(document, batch.get("source_version"), batch["row_start"], batch["row_end"])
+            if visual:
+                if self.knowledge._review_source_version(document) != batch["source_version"]:
+                    raise ReviewSourceChanged("审查依据已经变更，请重新上传。")
+                value, paragraphs = self._extract_visual(report, document, batch)
+            else:
+                paragraphs = self.knowledge.review_source_batch(document, batch.get("source_version"), batch["row_start"], batch["row_end"])
         except ReviewSourceChanged as error:
             raise ReviewMaterialsChanged(str(error)) from error
         except ReviewSourceTooLarge as error:
             raise ReviewFatalError(str(error)) from error
         if not paragraphs:
             raise ReviewOutputError("依据批次为空或材料已变更")
-        value = self._ask(report, TECHNICAL_POLICY + "\n文件：" + document["name"] + "\n原文段落：" + json.dumps([{key: row[key] for key in ("id", "text")} for row in paragraphs], ensure_ascii=False), ExtractionOutput, 4096)
+        if not visual:
+            value = self._ask(report, TECHNICAL_POLICY + "\n文件：" + document["name"] + "\n原文段落：" + json.dumps([{key: row[key] for key in ("id", "text")} for row in paragraphs], ensure_ascii=False), ExtractionOutput, 4096)
         mapping = {row["id"]: row for row in paragraphs}
         candidates, filtered, rejected = [], [], 0
         for field in ("technical_indicators", "closure_conditions"):
@@ -265,10 +291,20 @@ class ReviewEngine:
                         raise ValueError("invalid source")
                     chosen = [row for row in paragraphs if row["id"] in ids]
                     quote = "\n".join(row["text"] for row in chosen)
+                    if visual and item.get("quote"):
+                        pattern = r"\s*".join(re.escape(char) for char in item["quote"] if not char.isspace())
+                        found = re.search(pattern, quote) if pattern else None
+                        if not found:
+                            raise ValueError("Quote is not present in the visual transcription")
+                        quote = found.group()
                     if outside_technical_scope(item):
                         filtered.append({"title": item["title"], "reason": "商务、财务或行政事项，不属于技术核查范围"})
                         continue
-                    source = {"document_id": document["id"], "dataset_id": report["kb"], "document_name": document["name"], "ordinal": batch["row_start"], "content": quote}
+                    source = {"document_id": document["id"], "dataset_id": report["kb"], "document_name": document["name"], "ordinal": batch.get("row_start", batch.get("visual_page", 1)-1), "content": quote}
+                    if visual:
+                        source["source_kind"] = "visual_contract"
+                        if batch.get("source_part"):
+                            source.update(source_part=batch["source_part"], location_kind="embedded_image")
                     pages = list(dict.fromkeys(row["page_number"] for row in chosen if row.get("page_number") is not None))
                     if pages:
                         source["page_num_int"] = pages
@@ -281,6 +317,28 @@ class ReviewEngine:
             issues.append({"phase": "提取要求", "sources": [{"id": batch["key"], "file": document["name"]}], "retained": len(candidates),
                 "reason": f"{rejected} 条记录缺少有效条件或原文编号，已隔离；有效要求保留，请人工核对遗漏"})
         return {"requirements": self.merge_requirements([], candidates), "filtered": filtered, "issues": issues, "rejected": rejected}
+
+    def _extract_visual(self, report, document, batch):
+        page_id = "P" + str(batch["visual_page"])
+        prompt = (TECHNICAL_POLICY + "\n本次直接读取所附合同页面图像，先逐字转录为 page_text，再提取该页明确的技术要求。"
+                  "额外输出 page_text 字段，每条指标的 quote 必须是 page_text 中的原样连续片段。"
+                  f"本页唯一 source_ids 为 [\"{page_id}\"]。没有指标时数组为空，不推测看不清的数字。"
+                  "\n文件：" + document["name"])
+        try:
+            model = self.models.vision(report["extractionVisionModel"], temperature=0, max_tokens=8192)
+            if hasattr(model, "model_copy"):
+                model = model.model_copy(update={"max_retries": 0, "streaming": False})
+            response = model.invoke([SystemMessage(content=POLICY),
+                HumanMessage(content=[{"type": "text", "text": prompt},
+                                      *visual_basis_blocks(self.knowledge, document, batch)])])
+            raw = re.sub(r"<think>[\s\S]*?</think>", "", str(response.content)).strip()
+            value = PydanticOutputParser(pydantic_object=VisualExtractionOutput).parse(raw).model_dump()
+        except Exception as error:
+            if getattr(error, "status_code", None) in (401, 403):
+                raise ReviewFatalError(provider_error(error)) from None
+            raise ReviewOutputError("视觉指标提取失败，请检查模型看图能力和页面内容后重试。") from None
+        page_number = None if batch.get("reflow") or batch.get("source_part") else batch["visual_page"]
+        return value, [{"id": page_id, "text": value["page_text"], "page_number": page_number}]
 
     @staticmethod
     def split_batch(batch):

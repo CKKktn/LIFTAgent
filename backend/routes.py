@@ -67,12 +67,19 @@ def make_api(db, models, knowledge, retrieval, chat):
     def list_documents(dataset_id: str, page: int = 1, page_size: int = 20, keywords: str = "", id: str = "", name: str = ""):
         knowledge.dataset(dataset_id)
         page, page_size = page_values(page, page_size)
-        rows = db.rows("SELECT * FROM documents WHERE dataset_id=? ORDER BY created_at DESC, id DESC", (dataset_id,))
+        rows = db.rows("SELECT * FROM documents WHERE dataset_id=? AND COALESCE(json_extract(metadata,'$.review_basis'),0)=0 ORDER BY created_at DESC, id DESC", (dataset_id,))
         rows = [row for row in rows if (not id or row["id"] == id) and (not keywords or keywords.casefold() in row["name"].casefold()) and (not name or row["name"] == name)]
         return ok({"docs": [knowledge.public_document(row) for row in rows[(page - 1) * page_size:page * page_size]], "total": len(rows)})
 
     @router.post("/datasets/{dataset_id}/documents")
     async def upload_documents(dataset_id: str, file: list[UploadFile] = File(...)):
+        return await save_uploads(dataset_id, file)
+
+    @router.post("/datasets/{dataset_id}/review-bases")
+    async def upload_review_bases(dataset_id: str, file: list[UploadFile] = File(...)):
+        return await save_uploads(dataset_id, file, review_basis=True)
+
+    async def save_uploads(dataset_id, file, *, review_basis=False):
         knowledge.dataset(dataset_id)
         if len(file) > 100:
             raise HTTPException(400, "单次最多上传 100 个文件")
@@ -102,7 +109,7 @@ def make_api(db, models, knowledge, retrieval, chat):
                 if not size:
                     raise HTTPException(400, "不能上传空文件")
                 entries.append((name, path, size))
-            output = knowledge.add_documents(dataset_id, entries)
+            output = knowledge.add_documents(dataset_id, entries, review_basis=review_basis)
         except BaseException:
             for path in paths:
                 path.unlink(missing_ok=True)

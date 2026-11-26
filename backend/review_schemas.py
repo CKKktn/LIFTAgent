@@ -15,6 +15,10 @@ class ExtractionOutput(BaseModel):
     closure_conditions: list[Any]
 
 
+class VisualExtractionOutput(ExtractionOutput):
+    page_text: str = Field(max_length=50000)
+
+
 class ExtractedRequirement(BaseModel):
     model_config = ConfigDict(extra="ignore")
     type: RequirementType

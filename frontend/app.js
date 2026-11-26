@@ -52,7 +52,7 @@ function kbActions(k){
   $('renameKbAction').onclick=()=>modal('重命名知识库',`<label for="renameKbName">名称</label><input id="renameKbName" name="name" required value="${esc(k.name)}">`,async f=>{const name=f.get('name').trim();if(!name)throw Error('名称不能为空');await data('PUT',ds(k.id),{name});await refreshKbs();toast('知识库已重命名');});
   $('deleteKbAction').onclick=()=>{if(S.reviewAbort||S.chatAbort){toast('请先停止当前审查或回答，再删除知识库',true);return;}modal('删除知识库',`<p>将永久删除「${esc(k.name)}」及其文档、切片，并解除助手关联。已有协审会话会保留。</p><label for="deleteKbName">输入知识库名称以确认</label><input id="deleteKbName" name="name" required autocomplete="off">`,async f=>{if(f.get('name')!==k.name)throw Error('名称不匹配，未执行删除');await data('DELETE','/api/v1/datasets',{ids:[k.id]});if(S.kb===k.id){S.kb='';resetKbView();}if(S.quickKb===k.id){S.quickKb='';S.baselineSelected.clear();}await refreshKbs();await Promise.all([loadDocs(),loadQuick(),refreshAssistantsAfterDelete()]);toast('知识库已删除');},'确认删除');};
 }
-function renderKbs(){for(const [id,search,active] of [['kbList','kbSearch',S.kb],['quickKbList','quickKbSearch',S.quickKb]]){$(id).innerHTML=S.datasets.filter(k=>k.name.toLowerCase().includes($(search).value.toLowerCase())).map(k=>`<div class="kb-row"><button class="kb-item ${k.id===active?'active':''}" data-kb="${esc(k.id)}"><span>▤</span><div><strong>${esc(k.name)}</strong><small>${k.document_count||0} 个文件 · ${k.chunk_count||0} 个切片</small></div>${k.id===active?'<b>✓</b>':''}</button>${id==='kbList'?`<button class="icon-btn kb-options" data-kb-options="${esc(k.id)}" aria-label="${esc(k.name)} 的选项" title="重命名或删除">⋯</button>`:''}</div>`).join('')||empty('没有匹配的知识库');$(id).querySelectorAll('[data-kb]').forEach(b=>b.onclick=()=>busy(b,async()=>{if(id==='quickKbList'){if(S.reviewAbort)throw Error('请先停止当前审查');S.quickKb=b.dataset.kb;S.baselineSelected.clear();await loadQuick();}else{S.kb=b.dataset.kb;resetKbView();await loadDocs();}renderKbs();}));$(id).querySelectorAll('[data-kb-options]').forEach(b=>b.onclick=()=>kbActions(S.datasets.find(k=>k.id===b.dataset.kbOptions)));}const k=S.datasets.find(k=>k.id===S.kb);$('kbMeta').innerHTML=k?`<strong>${esc(k.name)}</strong><p>${esc(k.description||'暂无描述')}</p><p>解析方式：${esc(k.pipeline_id?'Pipeline · 流水线':chunkLabel(k.chunk_method))}</p><p>嵌入模型：${esc(k.embedding_model||'默认')}</p>`:'';$('quickKbCount').textContent=S.datasets.length;$('quickTarget').textContent=`上传至：${S.datasets.find(k=>k.id===S.quickKb)?.name||'请先创建知识库'}`;}
+function renderKbs(){for(const [id,search,active] of [['kbList','kbSearch',S.kb],['quickKbList','quickKbSearch',S.quickKb]]){$(id).innerHTML=S.datasets.filter(k=>k.name.toLowerCase().includes($(search).value.toLowerCase())).map(k=>`<div class="kb-row"><button class="kb-item ${k.id===active?'active':''}" data-kb="${esc(k.id)}"><span>▤</span><div><strong>${esc(k.name)}</strong><small>${k.document_count||0} 个文件 · ${k.chunk_count||0} 个切片</small></div>${k.id===active?'<b>✓</b>':''}</button>${id==='kbList'?`<button class="icon-btn kb-options" data-kb-options="${esc(k.id)}" aria-label="${esc(k.name)} 的选项" title="重命名或删除">⋯</button>`:''}</div>`).join('')||empty('没有匹配的知识库');$(id).querySelectorAll('[data-kb]').forEach(b=>b.onclick=()=>busy(b,async()=>{if(id==='quickKbList'){if(S.reviewAbort)throw Error('请先停止当前审查');S.quickKb=b.dataset.kb;S.baselineSelected.clear();await loadQuick();}else{S.kb=b.dataset.kb;resetKbView();await loadDocs();}renderKbs();}));$(id).querySelectorAll('[data-kb-options]').forEach(b=>b.onclick=()=>kbActions(S.datasets.find(k=>k.id===b.dataset.kbOptions)));}const k=S.datasets.find(k=>k.id===S.kb);$('kbMeta').innerHTML=k?`<strong>${esc(k.name)}</strong><p>${esc(k.description||'暂无描述')}</p><p>解析方式：${esc(k.pipeline_id?'Pipeline · 流水线':chunkLabel(k.chunk_method))}</p><p>嵌入模型：${esc(k.embedding_model||'默认')}</p>`:'';$('quickKbCount').textContent=S.datasets.length;$('quickTarget').textContent=`乙方资料库：${S.datasets.find(k=>k.id===S.quickKb)?.name||'请先创建知识库'}`;}
 $('kbSearch').oninput=$('quickKbSearch').oninput=renderKbs;
 async function refreshKbs(){S.datasets=[];for(let p=1;;p++){const rows=arrayOf(await data('GET',`/api/v1/datasets?page=${p}&page_size=100`));S.datasets.push(...rows);if(rows.length<100)break;}if(!S.datasets.some(k=>k.id===S.kb)){S.kb=S.datasets[0]?.id||'';resetKbView();}S.quickKb=S.datasets.some(k=>k.id===S.quickKb)?S.quickKb:S.kb;renderKbs();setOptions($('retrievalKb'),S.datasets.map(k=>({value:k.id,label:k.name})),'选择知识库');if(!$('retrievalKb').value)$('retrievalKb').value=S.kb;}
 function status(d){return {DONE:'完成解析',RUNNING:'正在解析',UNSTART:'未解析',FAIL:'解析失败',CANCEL:'已取消','0':'未解析','1':'正在解析','2':'已取消','3':'完成解析','4':'解析失败'}[d.run]||d.run||'未解析';}
@@ -107,11 +107,10 @@ bind('chooseChunkDocument',async()=>{
   };
   render();
 });
-bind('chooseBaseline',async()=>{if(S.reviewAbort)throw Error('请先停止审查');if(!S.quickKb)throw Error('请先选择知识库');const kb=S.quickKb,docs=await allKnowledgeDocs(kb);modal('选择合同 / 技术协议',`<p class="hint">所选文件用于提取要求，随后结合整个知识库检索问答，不将依据文件当成完成证明。</p><div class="check-list">${docs.map(d=>`<label>${fileIcon(d.name)}<input name="baseline" type="checkbox" value="${esc(d.id)}" ${S.baselineSelected.has(d.id)?'checked':''}>${esc(d.name)}</label>`).join('')||empty('知识库暂无文件，请先上传')}</div>`,async f=>{if(S.reviewAbort||S.quickKb!==kb)throw Error('审查范围已变更，请重新选择');S.baselineSelected=new Map(f.getAll('baseline').map(id=>[id,docs.find(d=>d.id===id)]));await loadQuick();},'使用所选文件');});
 async function loadQuick(){
   renderBaseline();
   const k=S.datasets.find(k=>k.id===S.quickKb);
-  $('quickScope').textContent=k?`审查范围：${k.name} 的全部已解析内容。合同和技术协议仅作为要求依据，不作为完成证明。`:'请先选择需要审查的知识库。';
+  $('quickScope').textContent=k?`乙方资料：${k.name} 的全部已解析内容。视觉模型提取合同指标，确认后由对话模型核查。`:'请先选择需要审查的知识库。';
 }
 function syncDocSelection(){
   const count=S.selected.size,all=S.docTotal>0&&count===S.docTotal;
@@ -185,7 +184,7 @@ for(const [suffix,delta] of [['Prev',-1],['Next',1]]){
   for(const [prefix,key,fn] of [['docs','docPage',loadDocs],['sessions','sessionPage',loadSessions]])bind(prefix+suffix,async()=>{S[key]=Math.max(1,S[key]+delta);await fn();});
 }
 bind('refreshDocs',loadDocs);
-async function upload(files,kb,quick=false){if(!kb)throw Error('请先选择知识库');if(!files.length)return;const f=new FormData();for(const file of files)f.append('file',file);toast(`正在上传 ${files.length} 个文件…`);const docs=arrayOf(await data('POST',`${ds(kb)}/documents`,f));if(quick)for(const d of docs){S.baselineSelected.set(d.id,d);}await refreshKbs();await Promise.all([loadQuick(),loadDocs()]);toast('上传完成，可开始解析或审查');}
+async function upload(files,kb,quick=false){if(!kb)throw Error('请先选择知识库');if(!files.length)return;const f=new FormData();for(const file of files)f.append('file',file);toast(`正在上传 ${files.length} 个文件…`);const docs=arrayOf(await data('POST',`${ds(kb)}/${quick?'review-bases':'documents'}`,f));if(quick)for(const d of docs){S.baselineSelected.set(d.id,d);}await refreshKbs();await Promise.all([loadQuick(),loadDocs()]);toast('上传完成，可开始解析或审查');}
 for(const [id,quick] of [['quickUpload',true]])$(id).onchange=e=>busy(null,async()=>{if(quick&&S.reviewAbort)throw Error('请先停止审查');await upload([...e.target.files],quick?S.quickKb:S.kb,quick);e.target.value='';});
 let kbUploading=false;
 $('kbAutoParse').checked=loadLocal('lift-kb-auto-parse',false)===true;
@@ -302,6 +301,8 @@ function applyWorkflowJob(job){
         if(report.title)$('projectName').value=report.title;$('reviewFocus').value=report.focus||'';
         const configured=S.models.find(model=>model.id===report.model||model.model_id===report.model),modelSelection=configured?modelValue(configured):report.model;
         if([...$('quickModel').options].some(option=>option.value===modelSelection))$('quickModel').value=modelSelection;
+        const visual=S.models.find(model=>model.id===report.extractionVisionModel);
+        if(visual)$('quickVisionModel').value=modelValue(visual);
         renderKbs();loadQuick().catch(error=>toast(error.message,true));
       }
     }
@@ -334,9 +335,11 @@ function editReviewRequirements(job){
 }
 function taskPayload(draft){
   const kb=draft?.kb||S.quickKb,baselineDocs=draft?.baselineDocs||[...S.baselineSelected.values()];
-  if(!kb)throw Error('请选择需要审查的知识库');if(!baselineDocs.length)throw Error('请先上传或选择合同 / 技术协议作为审查依据');
+  if(!kb)throw Error('请选择需要审查的知识库');if(!baselineDocs.length)throw Error('请先上传合同 / 技术协议作为审查依据');
+  const visual=draft?.extractionVisionModel||$('quickVisionModel').value||S.defaults.find(item=>item.model_type==='vision')?.model_id;
+  if(!visual)throw Error('请选择指标提取视觉模型');
   const selected=$('quickModel').value,defaultModel=getDefaultChatModel(S.models,S.defaults);
-  return {kb,baseline_document_ids:baselineDocs.map(document=>document.id),scope:'dataset',target_document_ids:[],model_id:draft?.model||selected||(defaultModel?modelValue(defaultModel):''),title:draft?.title||$('projectName').value,focus:draft?.focus??$('reviewFocus').value,...(draft?.dbId?{record_id:draft.dbId,record_revision:draft.dbRevision}:{})};
+  return {kb,extraction_vision_model_id:visual,baseline_document_ids:baselineDocs.map(document=>document.id),scope:'dataset',target_document_ids:[],model_id:draft?.model||selected||(defaultModel?modelValue(defaultModel):''),title:draft?.title||$('projectName').value,focus:draft?.focus??$('reviewFocus').value,...(draft?.dbId?{record_id:draft.dbId,record_revision:draft.dbRevision}:{})};
 }
 async function startStructuredReview(resume=false){
   if(S.reviewAbort)throw Error('已有审查正在进行');
@@ -371,7 +374,7 @@ bind('saveReviewTask',async()=>{
   if(!S.quickKb||!S.baselineSelected.size)throw Error('先选择知识库和合同 / 技术协议');
   if(S.reviewAbort)throw Error('请先停止正在运行的审查任务');
   leaveWorkflowView();
-  const report={version:4,mode:'three-stage',scope:'dataset',kb:S.quickKb,kbName:S.datasets.find(k=>k.id===S.quickKb)?.name||S.quickKb,title:$('projectName').value,createdAt:new Date().toISOString(),baselineDocs:[...S.baselineSelected.values()],targetDocs:[],requirements:[],results:[],complete:false,model:$('quickModel').value,modelLabel:$('quickModel').selectedOptions[0]?.textContent,focus:$('reviewFocus').value};
+  const report={version:4,mode:'three-stage',scope:'dataset',kb:S.quickKb,kbName:S.datasets.find(k=>k.id===S.quickKb)?.name||S.quickKb,title:$('projectName').value,createdAt:new Date().toISOString(),baselineDocs:[...S.baselineSelected.values()],targetDocs:[],requirements:[],results:[],complete:false,extractionVisionModel:$('quickVisionModel').value||S.defaults.find(item=>item.model_type==='vision')?.model_id,model:$('quickModel').value,modelLabel:$('quickModel').selectedOptions[0]?.textContent,focus:$('reviewFocus').value};
   await persistReport(report);saveLocal('lift-review-draft',report);$('resumeReview').hidden=false;$('resumeReview').textContent='开始已保存任务';toast('已保存为未开始任务');
 });
 $('startReview').onclick=()=>busy($('startReview'),()=>startStructuredReview()).finally(()=>setWorkflowControls(isReviewJobBusy(S.reviewJob)));
@@ -735,6 +738,7 @@ bind('retrieve',async()=>{
 function updateModelName(){const select=$('chatModel'),chat=S.chats.find(c=>c.id===$('assistantSelect').value);const configured=chat?.llm_id||chat?.tenant_llm_id||chat?.llm?.model_name;const fallback=S.defaults.find(m=>m.model_type==='chat');const found=S.models.find(m=>m.model_id===configured||modelValue(m)===configured||m.name===configured);const label=found?`${found.name} · ${found.instance_name}`:configured||fallback?.model_name||'尚未配置默认模型';if(select.options[0])select.options[0].textContent=`${label}（助手 / 默认）`;const text=select.selectedOptions[0]?.textContent||label;select.title=text;}
 $('chatModel').onchange=updateModelName;
 function renderModels(){
+  setOptions($('quickVisionModel'),modelOptions('vision'),'使用默认视觉模型');
   for(const id of ['quickModel','chatModel'])setOptions($(id),modelOptions('chat'),id==='quickModel'?'使用默认对话模型':'使用助手模型 / 默认模型');$('modelList').innerHTML=S.models.map(m=>`<article class="model-card"><h3>${esc(m.name)}</h3><p class="hint">${esc(m.provider_name)} / ${esc(m.instance_name)}</p>${(Array.isArray(m.model_type)?m.model_type:[m.model_type]).map(t=>`<span class="badge">${esc(modelTypeLabels[t]||t)}</span>`).join('')}</article>`).join('')||empty('尚未配置模型');
   const defaults=$('defaultModels');
   const names=modelTypeLabels;
