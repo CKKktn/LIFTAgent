@@ -188,6 +188,48 @@ def test_verdict_question_requires_real_human_interrupt(collab_workspace):
     assert any(task.interrupts for task in snapshot.tasks)
 
 
+@pytest.mark.parametrize('initial_pass,question', [
+    (True, "AX-221的满载续航是否达标？"),
+    (True, "AX-221的满载续航记录是什么？"),
+    (False, "AX-221的满载续航是否达标？"),
+])
+def test_collab_checks_counterevidence_only_before_a_positive_verdict(collab_workspace, monkeypatch, initial_pass, question):
+    w = collab_workspace
+    calls = []
+    chunks = [
+        {"id": "pass", "dataset_id": w.kb, "document_id": w.docs[1]["id"],
+         "document_name": "满载试验.txt", "content": "设备型号AX-221，批次B1，满载实测续航10小时。"},
+        {"id": "fail", "dataset_id": w.kb, "document_id": w.docs[2]["id"],
+         "document_name": "复测记录.txt", "content": "设备型号AX-221，批次B1，满载复测实测续航6小时。"},
+    ]
+
+    def search(options):
+        calls.append(options)
+        if "补查：" in options["question"]:
+            assert "复测" in options["question"] and "批次B1" in options["question"]
+            assert options["exclude_chunk_ids"] == ["pass"]
+            return {"chunks": chunks[1:]}
+        return {"chunks": chunks[:1] if initial_pass else chunks[1:]}
+
+    monkeypatch.setattr(w.app.state.collab_jobs.engine.retrieval, "search", search)
+    w.control["overrides"].update({
+        "COLLAB_EVIDENCE_V1": lambda p: {"sufficient": True, "relevant_ids": [r["source_id"] for r in p["references"]],
+                                       "missing": [], "conflicts": [], "summary": "核对合成测量"},
+        "COLLAB_ANSWER_V1": lambda p: ("两份满载记录分别为10小时[1]和6小时[2]，证据冲突。"
+                                      if len(p["references"]) == 2 else
+                                      "设备已满足续航要求，满载实测为10小时[1]。" if initial_pass else
+                                      "设备不满足续航要求，满载实测为6小时[1]。"),
+        "COLLAB_VALIDATE_V1": lambda p: {"grounded": True, "issues": [], "supported_ids": [r["source_id"] for r in p["references"]],
+                                       "summary": "合成记录支持草稿"},
+    })
+    job = wait_job(w, create(w, question=question)["id"])
+    assert job["status"] == "waiting_confirmation", job
+    assert [call["page_size"] for call in calls] == ([16, 16] if initial_pass else [16])
+    assert ("证据冲突" if initial_pass else "不满足") in job["answer"]
+    events = w.client.get(f"/api/v1/collab-jobs/{job['id']}/events?after=0")
+    assert "设备已满足续航要求" not in events.text
+
+
 @pytest.mark.parametrize('decision', ['approve', 'revise', 'reject'])
 def test_human_decision_is_audited_without_duplicate_turn_or_model_call(collab_workspace, decision):
     w = collab_workspace

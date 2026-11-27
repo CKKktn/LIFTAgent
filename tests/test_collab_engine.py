@@ -40,12 +40,12 @@ def answer_state():
             'history': [], 'settings': {}, 'references': [{'document_name': '合成.txt', 'content': '方案正文'}]}
 
 
-def test_answer_filters_fragmented_thought_before_any_public_delta(monkeypatch):
+def test_sourced_answer_filters_thought_and_waits_for_validation(monkeypatch):
     events = []
     monkeypatch.setattr(collab, '_writer', events.append)
     result = answer_engine(['可见<', 'thi', 'nk>', 'SECRET_PRIVATE', '</thi', 'nk>正文']).answer(answer_state())
-    assert result['answer'] == '可见正文'
-    assert ''.join(event.get('delta', '') for event in events) == '可见正文'
+    assert result['answer'] == '' and result['pending_answer'] == '可见正文'
+    assert not any(event.get('delta') for event in events)
     assert all('SECRET_PRIVATE' not in str(event) for event in events)
 
 
@@ -60,7 +60,7 @@ def test_stopping_mid_thought_never_persists_private_text(monkeypatch):
             raise collab.CollabStopped()
     with pytest.raises(collab.CollabStopped):
         answer_engine(['已公开。<th', 'ink>', 'SECRET_PRIVATE', '尚未结束的思考']).answer(answer_state(), SimpleNamespace(check_stop=check_stop))
-    assert ''.join(event.get('delta', '') for event in events) == '已公开。'
+    assert not any(event.get('delta') for event in events)
     assert all('SECRET_PRIVATE' not in str(event) for event in events)
 
 
@@ -122,8 +122,32 @@ def test_gap_or_conditional_text_is_not_a_confirmed_verdict(answer):
     assert not collab._strong_verdict(answer)
 
 
+@pytest.mark.parametrize("answer,positive", [
+    ("该设备满足续航要求[1]。", True),
+    ("离线缓存功能已实现[1]。", True),
+    ("设备不满足续航要求[1]。", False),
+    ("如果实测达标，可以验收。", False),
+    ("尚不能确认满足续航要求。", False),
+])
+def test_pass_check_recognizes_affirmative_wording_when_model_omits_status(answer, positive):
+    assert collab._positive_verdict(answer) == positive
+
+
 def test_model_context_and_reference_views_are_bounded():
     refs = collab._source_input([{'content': 'x' * 12000} for _ in range(40)])
-    assert len(refs) == 40 and sum(len(ref['content']) for ref in refs) <= 48000
+    assert len(refs) == 40 and sum(len(ref['content']) for ref in refs) <= 96000
     history = collab._history({'history': [{'role': 'user' if index % 2 == 0 else 'assistant', 'content': 'x' * 8000} for index in range(25)]})
     assert len(history) <= 20 and sum(len(row['content']) for row in history) <= 24000
+
+
+def test_collab_keeps_late_measurements_for_all_sixteen_sources():
+    review = collab.CollabEngine(None, SimpleNamespace(search=lambda options: {"chunks": [
+        {"id": str(index), "document_id": "doc", "dataset_id": "kb",
+         "content": "批次A。\n" + "一般介绍。" * 2600 + "\n满载复测：设备续航为6小时。"}
+        for index in range(20)
+    ][:options["page_size"]]}))
+    state = {"dataset_ids": ["kb"], "standalone_question": "设备满载续航是多少？"}
+    sources = review.retrieve(state)["references"]
+    sent = collab._source_input(sources, question=state["standalone_question"])
+    assert len(sent) == 16
+    assert all("批次A" in item["content"] and "续航为6小时" in item["content"] for item in sent)

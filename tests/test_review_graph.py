@@ -64,8 +64,10 @@ class Engine:
         assert submitted
         return deepcopy(submitted)
 
-    def retrieve(self, report, requirement, round_index, previous_chunks, gaps):
+    def retrieve(self, report, requirement, round_index, previous_chunks, gaps, *, countercheck=False, cited_text=""):
         self.calls.append(('retrieve',requirement['id'],round_index))
+        if countercheck:
+            self.calls.append(('countercheck',requirement['id']))
         return [{'reviewId':'E1','document_id':'plan','document_name':'合成方案.txt','content':'合成设计原文'}]
 
     def judge(self, report, requirement, chunks):
@@ -137,6 +139,30 @@ def test_uncertain_items_use_at_most_two_retrieval_rounds_and_are_not_failed_req
     assert len([call for call in engine.calls if call[0]=='judge']) == 1
     assert done['report']['results'][0]['status']=='证据不足'
     assert done['report']['results'][0]['retrievalRounds']==2
+
+
+@pytest.mark.parametrize('initial,rounds,checks,expected', [
+    ('已满足', 2, 1, '证据冲突'),
+    ('不满足', 1, 0, '不满足'),
+    ('证据不足', 2, 0, '已满足'),
+])
+def test_initial_verdict_routes_to_the_right_second_search(persisted, initial, rounds, checks, expected):
+    class ContradictoryRecords(Engine):
+        def retrieve(self, report, requirement, round_index, previous_chunks, gaps, *, countercheck=False, cited_text=""):
+            self.calls.append(('search', countercheck))
+            return [*previous_chunks, {'reviewId': f'E{round_index + 1}', 'content': ('实测10小时', '复测6小时')[round_index]}]
+
+        def judge(self, report, requirement, chunks):
+            if len(chunks) == 2:
+                assert [row['content'] for row in chunks] == ['实测10小时', '复测6小时']
+            return {'status': initial if len(chunks) == 1 else expected, 'analysis': '合成判定', 'evidence': []}
+
+    engine = ContradictoryRecords(('numeric',))
+    graph = build_review_graph(engine, persisted)
+    result = confirm(graph, graph.invoke({'task_id': 'fixture', 'request': {}}, config()))['report']['results'][0]
+    searches = [flag for name, flag in engine.calls if name == 'search']
+    assert len(searches) == rounds and sum(searches) == checks
+    assert result['status'] == expected
 
 
 def test_retry_resumes_optional_interrupt_and_only_retries_failed_item(persisted):

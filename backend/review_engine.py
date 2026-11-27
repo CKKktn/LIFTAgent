@@ -27,6 +27,7 @@ from .retrieval import KnowledgeRetriever
 from .review_schemas import DocumentMatches, ExtractedRequirement, ExtractionOutput, JudgmentOutput, PolishedOutput
 from .review_schemas import VisualExtractionOutput
 from .review_basis import visual_basis_batches, visual_basis_blocks
+from .review_evidence import SOURCES_PER_SEARCH, QUICK_ROUND_CHARACTERS, counterevidence_query, evidence_ranges, source_limits
 
 
 VERDICTS = ("已满足", "部分满足", "不满足", "证据不足", "待人工复核", "证据冲突")
@@ -429,7 +430,7 @@ class ReviewEngine:
             rows.append(row)
         return rows
 
-    def retrieve(self, report, requirement, round_index, previous_chunks, gaps):
+    def retrieve(self, report, requirement, round_index, previous_chunks, gaps, *, countercheck=False, cited_text=""):
         if round_index not in (0, 1):
             raise ReviewOutputError("补充检索次数超过本条预算")
         baseline = {row["id"] for row in report["baselineDocs"]} | set(report.get("baselineCopyIds", []))
@@ -437,10 +438,14 @@ class ReviewEngine:
         query = requirement["title"] + " " + requirement["criterion"]
         if requirement.get("type") == "numeric":
             query += " 项目方案 实测 测试记录"
-        if round_index:
+        if countercheck:
+            query = counterevidence_query(query, cited_text)
+        elif round_index:
             query += " 项目方案 技术设计 功能实现 参数 配置 " + str(gaps or "")
         query = query[:2000]
-        options = {"dataset_ids": [report["kb"]], "exclude_document_ids": sorted(baseline), "page": 1, "page_size": 32 if report["scope"] == "dataset" else 8,
+        previous_ids = {item["id"] for item in previous_chunks or [] if item.get("id")}
+        options = {"dataset_ids": [report["kb"]], "exclude_document_ids": sorted(baseline), "page": 1, "page_size": SOURCES_PER_SEARCH,
+                   "exclude_chunk_ids": sorted(previous_ids),
                    "similarity_threshold": 0.1 if round_index else 0.2, "vector_similarity_weight": 0.3, "top_k": 64, "highlight": False}
         if report["scope"] != "dataset":
             options["document_ids"] = sorted(allowed)
@@ -453,10 +458,7 @@ class ReviewEngine:
         # Keep the previous exact excerpts and IDs; complementary retrieval adds
         # new sources instead of renumbering evidence already used in a result.
         output = [copy.deepcopy(item) for item in previous_chunks or []]
-        seen = {(item.get("document_id"), item.get("id"), item.get("content")) for item in output}
-        remaining = max(0, 24000 - sum(len(item.get("content", "")) for item in output))
-        # Reserve room for a genuinely complementary second retrieval round.
-        budget = min(12000, remaining) if round_index == 0 else remaining
+        seen = {(item.get("document_id"), item.get("id")) for item in output if item.get("id")}
         candidates = []
         for document in documents:
             meta = document.metadata
@@ -467,26 +469,22 @@ class ReviewEngine:
             if not current["enabled"] or current["run"] != "DONE" or re.search(r"^(?:~\$|\.~lock\.)|\.(?:tmp|temp|lock)$", current["name"], re.I):
                 continue
             text = document.page_content
-            if not text.strip() or budget <= 0 or len(candidates) >= 8:
+            if not text.strip() or len(candidates) >= SOURCES_PER_SEARCH:
                 continue
-            if any(item.get("document_id") == identifier and item.get("id") == meta.get("id") for item in output) and meta.get("id"):
+            key = (identifier, meta.get("id") or text)
+            if key in seen:
                 continue
+            seen.add(key)
             candidates.append((document, current))
-        per_chunk = min(3000, max(1, budget // max(1, len(candidates))))
-        for document, current in candidates:
+        limits = source_limits([document.page_content for document, _ in candidates], QUICK_ROUND_CHARACTERS)
+        for (document, current), limit in zip(candidates, limits):
             meta, text, identifier = document.metadata, document.page_content, current["id"]
-            limit = min(len(text), per_chunk, budget)
-            for start in range(0, limit, 800):
-                end = min(start + 800, limit)
+            for start, end in evidence_ranges(text, limit, query):
                 excerpt = text[start:end]
-                key = (identifier, meta.get("id"), excerpt)
-                if key in seen:
-                    continue
-                seen.add(key)
                 source = _safe_source({**meta, "document_id": identifier, "dataset_id": report["kb"], "document_name": current["name"]}, excerpt)
-                source.update(reviewId="E" + str(len(output) + 1), excerpt_start=start, excerpt_end=end)
+                source.update(reviewId="E" + str(len(output) + 1), excerpt_start=start, excerpt_end=end,
+                              **({"counterevidence_search": True} if countercheck else {}))
                 output.append(source)
-                budget -= len(excerpt)
         return output
 
     def judge(self, report, requirement, chunks):
@@ -499,13 +497,17 @@ class ReviewEngine:
 带 image_evidence 的材料包含图纸标注或图片转录。人工确认的图纸标注用于核对设计图上明确写出的对象和值，
 引用必须说明这是图纸标注。图纸标注和图片转录都不作为可比实测。待复核的标注及图片转录可引用为背景线索，留待人工核对原图。
 对属于图纸对象归属的判断，应使用带原图位置的确认标注。试验、成品检验或验收须有对应阶段的有效记录。""" if any(map(image_evidence_context, chunks)) else ""
-        prompt = mode + image_policy + """
+        comparison = ("\n以下材料包含通过前补查。结合两轮原文，主动核对同一对象、批次、版本与可比工况的实测、复测、异常及变更记录。"
+                      "先核对新增材料是否适用，再给最终判定。同等适用的实测记录一份达标、一份不达标且无法取舍时，判证据冲突。"
+                      if any(item.get("counterevidence_search") for item in chunks) else "")
+        prompt = mode + image_policy + comparison + """
 未召回不能判未完成。材料分类相对于本条要求：支持=支持全部或部分符合；反证=在可比条件下明确不符；计划=未来承诺或愿望；背景=要求基准、适用条件或其他上下文。
 analysis 用一至两句给出决定结论的比较，写明关键数值和引用编号。先写决定结果的证据，再交代设计与实测的差异。project_plan 只写判断依据未覆盖的材料要点，不复述核查要求；gaps 只写尚未解决的缺口或冲突；recommendation 只写具体下一步。没有独立内容的字段用空字符串。
 输出 JSON：{"status":"已满足/部分满足/不满足/证据不足/证据冲突","project_plan":"补充材料要点","analysis":"简短判断依据","gaps":"缺口或冲突","recommendation":"具体后续行动","evidence":[{"source_id":"E1","kind":"支持/反证/计划/背景","basis":"可比实测或空字符串","analysis":"该引用支持的具体事实及比较"}]}。
 只选择下方真实编号，正文引用的每个编号也必须列入evidence，不输出或改写quote；程序按编号回填原文。无依据则 evidence为空且判证据不足。证据冲突必须同时有可比的支持材料和反证，不能仅因来源不同就判冲突。
 指标：""" + json.dumps({key: requirement.get(key) for key in ("title", "criterion", "question")}, ensure_ascii=False) + "\n用户关注点：" + report.get("focus", "") + "\n证据：" + json.dumps([
-            {"source_id": item["reviewId"], "file": item["document_name"], "content": item["content"], **image_evidence_context(item)}
+            {"source_id": item["reviewId"], "file": item["document_name"], "content": item["content"],
+             "counterevidence_search": item.get("counterevidence_search", False), **image_evidence_context(item)}
             for item in chunks
         ], ensure_ascii=False)
         result = self._ask(report, prompt, JudgmentOutput)

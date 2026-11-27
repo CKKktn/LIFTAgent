@@ -153,7 +153,7 @@ def test_collab_accepts_an_explicit_design_only_statement(monkeypatch, disclaime
     assert result["validation"]["passed"], result["validation"]
 
 
-def test_collab_generation_receives_relevant_sources_with_original_ids(monkeypatch):
+def test_collab_generation_receives_all_sources_and_keeps_relevance_as_a_hint(monkeypatch):
     payloads = []
     def answer(prompt):
         payloads.append(json.loads(prompt.messages[-1].content.split("INPUT_JSON:\n", 1)[1]))
@@ -168,7 +168,8 @@ def test_collab_generation_receives_relevant_sources_with_original_ids(monkeypat
                        {"document_name": "relevant.png", "content": "H1 H2"}],
         "evidence_assessment": {"relevant_ids": [2], "sufficient": True},
     })
-    assert [row["source_id"] for row in payloads[0]["references"]] == [2]
+    assert [row["source_id"] for row in payloads[0]["references"]] == [1, 2]
+    assert payloads[0]["evidence_assessment"]["relevant_ids"] == [2]
 
 
 def test_nominal_dimension_inherits_its_explicit_tolerance_unit():

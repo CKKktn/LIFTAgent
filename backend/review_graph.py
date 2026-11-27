@@ -30,7 +30,7 @@ NODE_LABELS = {
     "select_requirement": "分派下一条已确认要求", "document_check": "核对技术文档文件名",
     "numeric_retrieve": "检索数值方案证据", "functional_retrieve": "检索功能实现证据",
     "judge_numeric": "比较参数、单位及条件", "judge_functional": "核对功能实现机制",
-    "assess_evidence": "判断是否需要补充检索", "supplement_retrieval": "结合缺口补检索（两轮内）",
+    "assess_evidence": "判断是否需要补查反证或证据缺口", "supplement_retrieval": "补查反证或证据缺口（两轮内）",
     "item_failure": "保留异常供人工复核", "save_item": "按条目编号保存结果",
     "checking_done": "逐项核查结束", "report_workflow": "报告整理子图",
     "collect_report": "核对版本并固定原始报告", "polish_one": "整理并校验展示内容",
@@ -72,6 +72,7 @@ class ReviewState(TypedDict, total=False):
     current_chunks: list
     current_result: dict
     round_index: int
+    countercheck: bool
     judge_attempts: int
     judge_ok: bool
     retrieval_changed: bool
@@ -239,7 +240,7 @@ def build_review_graph(engine, checkpointer, controls=None):
         checked = set(state.get("checked_ids", []))
         requirement = next((item for item in state["report"]["requirements"] if item["id"] not in checked), {})
         return {"current_requirement": requirement, "current_chunks": [], "current_result": {}, "round_index": 0,
-                "judge_attempts": 0, "item_error": "", "phase": "checking", "stage": 2,
+                "judge_attempts": 0, "item_error": "", "countercheck": False, "phase": "checking", "stage": 2,
                 "message": f"逐项核查 {len(checked)} / {len(state['report']['requirements'])} 项"}
 
     def document_check(state):
@@ -255,14 +256,20 @@ def build_review_graph(engine, checkpointer, controls=None):
         requirement = state["current_requirement"]
         try:
             previous = state.get("current_chunks", [])
-            chunks = engine.retrieve(state["report"], requirement, state["round_index"], previous, state.get("current_result", {}).get("gaps", ""))
+            initial = state.get("current_result", {})
+            options = {}
+            if state.get("countercheck"):
+                options = {"countercheck": True, "cited_text": "\n".join(
+                    str(row.get("quote", "")) for row in initial.get("evidence", []) if row.get("kind") == "支持"
+                )}
+            chunks = engine.retrieve(state["report"], requirement, state["round_index"], previous, initial.get("gaps", ""), **options)
             if not chunks:
                 return {"current_chunks": [], "retrieval_changed": False, "judge_attempts": 0,
                         "current_result": {"status": "证据不足", "project_plan": "未取得可核对的项目方案或实现描述。",
                                            "analysis": "检索范围内没有足够证据，不能据此认定未完成。", "gaps": "缺少对应参数、适用条件或实现描述。",
                                            "recommendation": "补充材料或调整指标条件后复核。", "evidence": []}}
             return {"current_chunks": chunks, "retrieval_changed": chunks != previous, "judge_attempts": 0,
-                    "message": f"{requirement['id']} · 第 {state['round_index'] + 1} 轮检索已取得 {len(chunks)} 段原文。"}
+                    "message": f"{requirement['id']} · 已保留 {count_sources(chunks)} 个源切片的原文。"}
         except ReviewFatalError:
             raise
         except Exception:
@@ -297,20 +304,25 @@ def build_review_graph(engine, checkpointer, controls=None):
 
     def evidence_route(state):
         status = state.get("current_result", {}).get("status")
-        if status not in {"已满足", "不满足"} and state["round_index"] + 1 < MAX_RETRIEVAL_ROUNDS:
+        if status != "不满足" and state["round_index"] + 1 < MAX_RETRIEVAL_ROUNDS:
             return "supplement_retrieval"
         return "save_item"
 
     def supplement_retrieval(state):
+        countercheck = state.get("current_result", {}).get("status") == "已满足"
+        message = "初判已满足，补查同对象的复测、异常及变更记录。" if countercheck else "结合证据缺口补充检索（最多两轮）。"
         return {"round_index": state["round_index"] + 1, "judge_attempts": 0, "item_error": "",
-                "message": state["current_requirement"]["id"] + " · 结合证据缺口补充检索（最多两轮）。"}
+                "countercheck": countercheck, "message": state["current_requirement"]["id"] + " · " + message}
 
     def item_failure(state):
         previous = deepcopy(state.get("current_result", {}))
         result = {"status": "待人工复核", "project_plan": "本项未能完成有效核查。", "analysis": "本条处理出现异常，不影响其他成功条目。",
                   "gaps": state.get("item_error") or "缺少有效判定。", "recommendation": "检查模型或资料后，使用重试异常项继续。", "evidence": [], **previous,
                   "retryable": True}
-        if not previous:
+        if state.get("countercheck"):
+            result.update(status="待人工复核", analysis="首轮初判已满足，未完成通过前反证核查。",
+                          gaps=state.get("item_error") or "通过前补查未完成。")
+        elif not previous:
             result["status"] = "待人工复核"
         return {"current_result": result}
 
@@ -319,7 +331,7 @@ def build_review_graph(engine, checkpointer, controls=None):
         identifier = state["current_requirement"]["id"]
         result = {**state["current_result"], "requirementId": identifier, "checkType": state["current_requirement"]["type"],
                   "retrievalRounds": 0 if state["current_requirement"]["type"] == "document" else state["round_index"] + 1,
-                  "retrievedChunks": len(state.get("current_chunks", []))}
+                  "retrievedChunks": count_sources(state.get("current_chunks", []))}
         by_id = {item["requirementId"]: item for item in report.get("results", [])}
         by_id[identifier] = result
         report["results"] = [by_id[item["id"]] for item in report["requirements"] if item["id"] in by_id]
@@ -331,6 +343,10 @@ def build_review_graph(engine, checkpointer, controls=None):
 
     def checking_done(state):
         return {"phase": "reporting", "stage": 3, "message": "逐项核查已保存，开始核对版本与整理报告。"}
+
+    def count_sources(chunks):
+        return len({(row.get("document_id"), row.get("id") or row.get("reviewId") or index)
+                    for index, row in enumerate(chunks)})
 
     check = StateGraph(ReviewState)
     functions = {"select_requirement": select_requirement, "document_check": document_check, "numeric_retrieve": retrieve,

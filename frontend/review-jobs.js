@@ -139,7 +139,7 @@ const NODE_NOTES={
  judge_numeric:'比较参数、单位、阈值和适用条件；方案符合与实测达标分别表述。',
  judge_functional:'核对具体实现机制，区分已经实现的描述与未来计划或承诺。',
  assess_evidence:'检查当前证据与判定，决定保存结果还是在预算内补充检索。',
- supplement_retrieval:'结合证据缺口补检索，数值和功能核查各最多两轮检索。',
+ supplement_retrieval:'初判已满足时补查反证，材料不足时按缺口补查。每轮最多保留16个源切片。',
  item_failure:'保留本项异常，供人工复核或单独重试，其他成功结果继续保留。',
  save_item:'按要求编号更新结果与引文，恢复执行时避免重复追加条目。',
  checking_done:'逐项核查结束，转入报告整理。',

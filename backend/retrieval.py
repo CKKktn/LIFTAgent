@@ -18,10 +18,11 @@ from .models import terms
 class SQLiteVectorStore(VectorStore):
     """LangChain VectorStore over persisted chunks, with scoped hybrid ranking."""
 
-    def __init__(self, db, embedding, embedding_id, dataset_ids, document_ids=None, exclude_ids=None, vector_weight=0.3):
+    def __init__(self, db, embedding, embedding_id, dataset_ids, document_ids=None, exclude_ids=None, vector_weight=0.3, exclude_chunk_ids=None):
         self.db, self._embedding, self.embedding_id = db, embedding, embedding_id
         self.dataset_ids, self.document_ids = dataset_ids, document_ids
         self.exclude_ids, self.vector_weight = exclude_ids or [], vector_weight
+        self.exclude_chunk_ids = frozenset(exclude_chunk_ids or ())
 
     @property
     def embeddings(self):
@@ -78,6 +79,8 @@ class SQLiteVectorStore(VectorStore):
         average_length = sum(sum(counter.values()) for counter in counters) / max(1, len(rows))
         scored = []
         for row, counter in zip(rows, counters):
+            if row["id"] in self.exclude_chunk_ids:
+                continue
             vector = json.loads(row["vector"])
             if len(vector) != len(query_vector):
                 raise ValueError("嵌入向量维度已改变，请重新解析该知识库")
@@ -155,11 +158,17 @@ class RetrievalService:
         weight = max(0, min(1, float(body.get("vector_similarity_weight", 0.3))))
         size = max(1, min(100, int(body.get("page_size", 10))))
         page = max(1, int(body.get("page", 1)))
+        exclude_chunks = body.get("exclude_chunk_ids", [])
+        if not isinstance(exclude_chunks, list) or len(exclude_chunks) > 1000 or any(
+            not isinstance(identifier, str) or len(identifier) > 128 for identifier in exclude_chunks
+        ):
+            raise ValueError("exclude_chunk_ids 必须是有效的切片编号列表")
         candidates = []
         for identifier in dict.fromkeys(dataset_ids):
             dataset = self.knowledge.dataset(identifier)
             embedding_id, embedding = self.models.embedding(dataset["embedding_model"])
-            store = SQLiteVectorStore(self.db, embedding, embedding_id, [identifier], body.get("document_ids"), body.get("exclude_document_ids"), weight)
+            store = SQLiteVectorStore(self.db, embedding, embedding_id, [identifier], body.get("document_ids"),
+                                      body.get("exclude_document_ids"), weight, exclude_chunk_ids=exclude_chunks)
             candidates.extend(store.similarity_search_with_score(question, k=max(64, min(1000, page * size))))
         candidates.sort(key=lambda item: item[1], reverse=True)
         candidates = [(document, score) for document, score in candidates if score >= threshold]

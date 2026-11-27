@@ -366,6 +366,32 @@ def test_complementary_retrieval_preserves_ids_and_appends_new_evidence(engine_w
         w.engine.retrieve(state["report"], output["requirements"][0], 2, second, "")
 
 
+def test_quick_review_keeps_16_sources_per_round_and_late_measurements(engine_workspace, monkeypatch):
+    w = engine_workspace
+    state, output = extracted(w)
+    requests = []
+
+    def search(options):
+        requests.append(options)
+        prefix = len(requests)
+        return {"chunks": [{"id": f"{prefix}-{index}", "document_id": w.plan["id"],
+                            "dataset_id": w.dataset["id"],
+                            "content": "设备批次A。\n" + "一般介绍。" * 1600 + "\n满载复测：设备续航时间为6小时。"}
+                           for index in range(20)]}
+
+    monkeypatch.setattr(w.retrieval, "search", search)
+    requirement = output["requirements"][0]
+    first = w.engine.retrieve(state["report"], requirement, 0, [], "")
+    combined = w.engine.retrieve(state["report"], requirement, 1, first, "", countercheck=True)
+    assert len({row["id"] for row in first}) == 16
+    assert len({row["id"] for row in combined}) == 32
+    assert {row["id"] for row in combined if "续航时间为6小时" in row["content"]} == {row["id"] for row in combined}
+    assert combined[:len(first)] == first
+    assert [request["page_size"] for request in requests] == [16, 16]
+    assert "复测" in requests[1]["question"]
+    assert set(requests[1]["exclude_chunk_ids"]) == {row["id"] for row in first}
+
+
 def test_judgment_refills_program_original_and_downgrades_invalid_reference(engine_workspace, monkeypatch):
     w = engine_workspace
     state, output = extracted(w)
