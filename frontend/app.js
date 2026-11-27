@@ -57,8 +57,26 @@ $('kbSearch').oninput=$('quickKbSearch').oninput=renderKbs;
 async function refreshKbs(){S.datasets=[];for(let p=1;;p++){const rows=arrayOf(await data('GET',`/api/v1/datasets?page=${p}&page_size=100`));S.datasets.push(...rows);if(rows.length<100)break;}if(!S.datasets.some(k=>k.id===S.kb)){S.kb=S.datasets[0]?.id||'';resetKbView();}S.quickKb=S.datasets.some(k=>k.id===S.quickKb)?S.quickKb:S.kb;renderKbs();setOptions($('retrievalKb'),S.datasets.map(k=>({value:k.id,label:k.name})),'选择知识库');if(!$('retrievalKb').value)$('retrievalKb').value=S.kb;}
 function status(d){return {DONE:'完成解析',RUNNING:'正在解析',UNSTART:'未解析',FAIL:'解析失败',CANCEL:'已取消','0':'未解析','1':'正在解析','2':'已取消','3':'完成解析','4':'解析失败'}[d.run]||d.run||'未解析';}
 function renderBaseline(){
-  $('baselineFiles').innerHTML=[...S.baselineSelected.values()].map(d=>`<div class="file-item">${fileIcon(d.name)}<div><strong>${esc(d.name)}</strong><small>审查依据 · 不作为完成证明</small></div><button class="icon-btn" data-remove-baseline="${esc(d.id)}" aria-label="移除 ${esc(d.name)}">×</button></div>`).join('')||'<p class="hint">尚未选择合同或技术协议</p>';
-  $('baselineFiles').querySelectorAll('[data-remove-baseline]').forEach(b=>b.onclick=()=>busy(b,async()=>{if(S.reviewAbort)throw Error('请先停止审查');S.baselineSelected.delete(b.dataset.removeBaseline);await loadQuick();}));
+  const list=$('baselineFiles'),drop=$('quickDrop'),add=$('quickAddFiles');
+  const hasFiles=S.baselineSelected.size>0;
+  const focused=document.activeElement;
+  const focusWasInList=list.contains(focused);
+  drop.hidden=hasFiles;
+  list.hidden=!hasFiles;
+  add.hidden=!hasFiles;
+  list.innerHTML=[...S.baselineSelected.values()].map(document=>`
+    <div class="quick-basis-file">
+      ${fileIcon(document.name)}
+      <strong>${esc(document.name)}</strong>
+      <button type="button" class="quick-basis-remove" data-remove-baseline="${esc(document.id)}" aria-label="移除 ${esc(document.name)}">×</button>
+    </div>`).join('');
+  if(hasFiles&&(focused===drop||focusWasInList))add.focus();
+  if(!hasFiles&&(focused===add||focusWasInList))drop.focus();
+  list.querySelectorAll('[data-remove-baseline]').forEach(b=>b.onclick=()=>busy(b,async()=>{
+    if(S.reviewAbort)throw Error('请先停止审查');
+    S.baselineSelected.delete(b.dataset.removeBaseline);
+    await loadQuick();
+  }));
 }
 async function allKnowledgeDocs(kb){
   const docs=[];
@@ -183,7 +201,15 @@ for(const [suffix,delta] of [['Prev',-1],['Next',1]]){
 }
 bind('refreshDocs',loadDocs);
 async function upload(files,kb,quick=false){if(!kb)throw Error('请先选择知识库');if(!files.length)return;const f=new FormData();for(const file of files)f.append('file',file);toast(`正在上传 ${files.length} 个文件…`);const docs=arrayOf(await data('POST',`${ds(kb)}/${quick?'review-bases':'documents'}`,f));if(quick)for(const d of docs){S.baselineSelected.set(d.id,d);}await refreshKbs();await Promise.all([loadQuick(),loadDocs()]);toast('上传完成，可开始解析或审查');}
-for(const [id,quick] of [['quickUpload',true]])$(id).onchange=e=>busy(null,async()=>{if(quick&&S.reviewAbort)throw Error('请先停止审查');await upload([...e.target.files],quick?S.quickKb:S.kb,quick);e.target.value='';});
+$('quickAddFiles').onclick=()=>$('quickUpload').click();
+$('quickUpload').onchange=event=>{
+  const files=[...event.target.files];
+  event.target.value='';
+  return busy(null,async()=>{
+    if(S.reviewAbort)throw Error('请先停止审查');
+    await upload(files,S.quickKb,true);
+  });
+};
 let kbUploading=false;
 $('kbAutoParse').checked=loadLocal('lift-kb-auto-parse',false)===true;
 function updateAutoParseLabel(){$('kbAutoParseState').textContent=$('kbAutoParse').checked?'已启用':'未启用';}
