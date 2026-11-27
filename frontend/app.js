@@ -64,12 +64,17 @@ function renderBaseline(){
   drop.hidden=hasFiles;
   list.hidden=!hasFiles;
   add.hidden=!hasFiles;
-  list.innerHTML=[...S.baselineSelected.values()].map(document=>`
-    <div class="quick-basis-file">
-      ${fileIcon(document.name)}
-      <strong>${esc(document.name)}</strong>
-      <button type="button" class="quick-basis-remove" data-remove-baseline="${esc(document.id)}" aria-label="移除 ${esc(document.name)}">×</button>
-    </div>`).join('');
+  list.innerHTML=[...S.baselineSelected.values()].map(file=>{
+    const url=proxyUrl(`/api/v1/documents/${encodeURIComponent(file.id)}/preview`);
+    const source={document_id:file.id,dataset_id:S.quickKb,document_name:file.name};
+    return `<div class="quick-basis-file">
+      ${fileIcon(file.name)}
+      <a class="quick-basis-link" href="${esc(url)}" data-file-source="${esc(JSON.stringify(source))}">
+        <span>${esc(file.name)}</span><span class="quick-basis-link-icon" aria-hidden="true">↗</span>
+      </a>
+      <button type="button" class="quick-basis-remove" data-remove-baseline="${esc(file.id)}" aria-label="移除 ${esc(file.name)}">×</button>
+    </div>`;
+  }).join('');
   if(hasFiles&&(focused===drop||focusWasInList))add.focus();
   if(!hasFiles&&(focused===add||focusWasInList))drop.focus();
   list.querySelectorAll('[data-remove-baseline]').forEach(b=>b.onclick=()=>busy(b,async()=>{
